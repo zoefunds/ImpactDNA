@@ -2,7 +2,7 @@
 
 ## 1. Intelligent Contract (GenLayer Studio — already deployed)
 
-Deployed to StudioNet at `0x2403a1bCc526AC1370a5577c5c4712F5Af1F5749`.
+Deployed to StudioNet at `0xAa14d19Ad58AdB34b34B22936E1B0640EF951648`.
 
 To redeploy (e.g. after changes):
 1. Open https://studio.genlayer.com, create/select an account.
@@ -35,7 +35,7 @@ fly secrets set \
   REDIS_URL="rediss://…upstash…" \
   BREVO_API_KEY="xkeysib-…" \
   BREVO_SENDER_EMAIL="preciousmofeoluwa@gmail.com" \
-  GENLAYER_CONTRACT_ADDRESS="0x2403a1bCc526AC1370a5577c5c4712F5Af1F5749" \
+  GENLAYER_CONTRACT_ADDRESS="0xAa14d19Ad58AdB34b34B22936E1B0640EF951648" \
   FRONTEND_URL="https://<your-vercel-domain>" \
   CORS_ORIGINS="https://<your-vercel-domain>"
 

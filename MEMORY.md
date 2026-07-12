@@ -4,10 +4,10 @@ A running log of decisions, state, and operational facts. Update as the project 
 
 ## Deployed state
 
-- **Intelligent Contract**: `0x2403a1bCc526AC1370a5577c5c4712F5Af1F5749` on **GenLayer StudioNet** (gasless).
-  - Constructor used: `platform_name="Impact_DNA"`, `min_eligible_score=0`.
-  - ⚠️ Recommended: owner should call `set_min_eligible_score(40)` so low-impact work isn't funding-eligible.
+- **Intelligent Contract**: `0xAa14d19Ad58AdB34b34B22936E1B0640EF951648` on **GenLayer StudioNet** (gasless).
+  - Constructor used: `platform_name="Impact_DNA"`, `min_eligible_score=40`.
   - Contract owner / first curator: `0x7401c129EDfc26E68FE19309fE461eb3Db1058Eb` (the Studio deployer account).
+  - Previous deployment (superseded): `0x2403a1bCc526AC1370a5577c5c4712F5Af1F5749` (gate was 0).
 - **Backend**: Fly.io app `impactdna-api` (region iad), 24/7 — `auto_stop_machines="off"`, `min_machines_running=1`, restart policy always.
 - **Frontend**: Vercel (Next.js 14).
 - **GitHub**: https://github.com/zoefunds/ImpactDNA (no AI attribution in commits — project policy).

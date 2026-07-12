@@ -66,16 +66,20 @@ function serialize(value: unknown): unknown {
 export async function contractRead(
   functionName: string,
   args: unknown[] = [],
-  ttlSeconds?: number,
+  ttlSeconds?: number | { skipCache: boolean },
 ): Promise<unknown> {
   if (!contractConfigured()) {
     throw Object.assign(new Error("Intelligent contract address not configured yet"), {
       statusCode: 503,
     });
   }
+  const skipCache = typeof ttlSeconds === "object" && ttlSeconds.skipCache;
+  const ttl = typeof ttlSeconds === "number" ? ttlSeconds : undefined;
   const cacheKey = `glread:${functionName}:${JSON.stringify(args)}`;
-  const cached = await cacheGet(cacheKey);
-  if (cached) return JSON.parse(cached);
+  if (!skipCache) {
+    const cached = await cacheGet(cacheKey);
+    if (cached) return JSON.parse(cached);
+  }
 
   const client = readClient();
   const result = await client.readContract({
@@ -84,7 +88,7 @@ export async function contractRead(
     args: args as never[],
   } as never);
   const plain = serialize(result);
-  await cacheSet(cacheKey, JSON.stringify(plain), ttlSeconds);
+  await cacheSet(cacheKey, JSON.stringify(plain), ttl);
   return plain;
 }
 

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { query } from "../db.js";
-import { contractWrite } from "../lib/genlayer.js";
+import { contractWrite, contractRead } from "../lib/genlayer.js";
 import { revealPrivateKey } from "../lib/wallet.js";
 import { requireAuth } from "../middleware/auth.js";
 import { rateLimit } from "../middleware/rateLimit.js";
@@ -111,9 +111,16 @@ contributionsRouter.post(
     const { key } = await userWalletKey(req.user!.id);
     const result = await contractWrite(key, "submit_contribution", [repo, category, description]);
 
-    // Mirror locally for fast dashboards (best effort).
+    // Mirror locally for fast dashboards (best effort). The canonical id
+    // comes from the chain itself — receipts don't reliably expose it.
     try {
-      const cid = extractReturnedId(result.result);
+      let cid = extractReturnedId(result.result);
+      if (!cid) {
+        const onchain = (await contractRead("get_contribution_by_repo", [repo], {
+          skipCache: true,
+        })) as { id?: string } | null;
+        cid = onchain?.id ?? null;
+      }
       await query(
         `INSERT INTO contribution_mirror (contribution_id, user_id, repo, category, tx_hash)
          VALUES ($1,$2,$3,$4,$5)
@@ -138,11 +145,24 @@ contributionsRouter.post(
     const result = await contractWrite(key, "evaluate_contribution", [contributionId]);
 
     try {
-      const payload = result.result as Record<string, unknown> | null;
+      // Pull the authoritative record from the chain and reconcile the
+      // mirror by repo (covers rows stored under a fallback tx- id).
+      const onchain = (await contractRead("get_contribution", [contributionId], {
+        skipCache: true,
+      })) as Record<string, unknown>;
       await query(
-        `UPDATE contribution_mirror SET status = 'evaluated', payload = $2, updated_at = now()
-         WHERE contribution_id = $1`,
-        [contributionId, JSON.stringify(payload ?? {})],
+        `UPDATE contribution_mirror
+         SET contribution_id = $1, status = $2, score_total = $3, eligible = $4,
+             payload = $5, updated_at = now()
+         WHERE repo = $6 OR contribution_id = $1`,
+        [
+          contributionId,
+          String(onchain.status ?? "evaluated"),
+          Number(onchain.score_total ?? 0),
+          Boolean(onchain.eligible),
+          JSON.stringify(onchain ?? {}),
+          String(onchain.repo ?? ""),
+        ],
       );
     } catch (err) {
       logger.warn({ err }, "mirror update failed");
@@ -199,7 +219,38 @@ contributionsRouter.get(
        FROM contribution_mirror WHERE user_id = $1 ORDER BY created_at DESC LIMIT 100`,
       [req.user!.id],
     );
-    res.json({ items: rows.rows });
+
+    // Self-heal rows stored under a fallback tx- id (or left stale) by
+    // reconciling with the authoritative on-chain record.
+    const items = await Promise.all(
+      rows.rows.map(async (row) => {
+        const stale = String(row.contribution_id).startsWith("tx-") || row.status === "submitted";
+        if (!stale) return row;
+        try {
+          const onchain = (await contractRead("get_contribution_by_repo", [String(row.repo)], 60)) as
+            Record<string, unknown>;
+          const fixed = {
+            ...row,
+            contribution_id: String(onchain.id ?? row.contribution_id),
+            status: String(onchain.status ?? row.status),
+            score_total: Number(onchain.score_total ?? row.score_total),
+            eligible: Boolean(onchain.eligible ?? row.eligible),
+          };
+          if (fixed.contribution_id !== row.contribution_id || fixed.status !== row.status) {
+            void query(
+              `UPDATE contribution_mirror
+               SET contribution_id = $1, status = $2, score_total = $3, eligible = $4, updated_at = now()
+               WHERE repo = $5 AND user_id = $6`,
+              [fixed.contribution_id, fixed.status, fixed.score_total, fixed.eligible, row.repo, req.user!.id],
+            ).catch((err) => logger.warn({ err }, "mirror self-heal failed"));
+          }
+          return fixed;
+        } catch {
+          return row;
+        }
+      }),
+    );
+    res.json({ items });
   }),
 );
 

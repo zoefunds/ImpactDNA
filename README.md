@@ -9,7 +9,7 @@ influential? — is performed by a **GenLayer Intelligent Contract**: validators
 independently fetch live GitHub evidence and score impact with LLM reasoning,
 and must reach consensus before anything is recorded or funded.
 
-**Deployed contract (GenLayer StudioNet):** `0x2403a1bCc526AC1370a5577c5c4712F5Af1F5749`
+**Deployed contract (GenLayer StudioNet):** `0xAa14d19Ad58AdB34b34B22936E1B0640EF951648`
 
 ## Why GenLayer (and not an off-chain AI app)
 
