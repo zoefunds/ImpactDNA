@@ -1,50 +1,5 @@
+# v0.2.17
 # { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
-
-"""
-ImpactDNA — Retroactive Public Goods Funding on GenLayer
-=========================================================
-
-A single production Intelligent Contract that:
-
-  1. Registers open-source developers and verifies their GitHub identity
-     using contract-side web evidence (validators re-fetch the GitHub API —
-     never trusting user-submitted text alone).
-  2. Accepts contribution submissions (GitHub repositories) months after
-     the work shipped.
-  3. Evaluates real downstream ecosystem impact with LLM reasoning over
-     evidence fetched inside the nondeterministic block (repository
-     metadata, activity signals) — scored across five dimensions.
-  4. Detects manipulation / fraud (star-farming, fork-renaming, thin
-     derivative work) with comparative validation.
-  5. Runs epoch-based retroactive funding rounds: a funding pool is
-     allocated pro-rata across eligible contributions by impact weight —
-     a fully deterministic settlement step.
-  6. Supports appeals with independent re-evaluation, curator governance,
-     pausing, and a tamper-evident audit log.
-
-Consensus design (per https://skills.genlayer.com write-contract skill):
-
-  * Deterministic web JSON (GitHub REST stable fields) -> strict_eq over
-    a canonicalized, stable-field-only projection.
-  * LLM scoring -> gl.vm.run_nondet_unsafe with a custom validator that
-    INDEPENDENTLY re-runs the task and compares decision fields with
-    explicit tolerances (score buckets, gate booleans), never
-    leader-output-format-only checks.
-  * Errors are classified with prefixes so validators can agree on
-    failure paths instead of forcing needless leader rotation:
-      [EXPECTED]  deterministic business errors  -> exact match
-      [EXTERNAL]  upstream 4xx                   -> exact match
-      [TRANSIENT] network / 5xx                  -> agree if both transient
-      [LLM_ERROR] LLM misbehaviour               -> disagree (rotate)
-  * Tolerances are deliberately generous (adjacent score-bucket
-    agreement) so honest validators converge and the transaction does
-    not end UNDETERMINED, while gate decisions (eligible / fraudulent)
-    still require real agreement.
-
-Storage follows GenLayer rules: class-level annotations, TreeMap /
-DynArray / u256 / Address only, complex records serialized as JSON
-strings, O(1) counters maintained alongside collections.
-"""
 
 import json
 import re
