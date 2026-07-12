@@ -1,0 +1,22 @@
+# Local development only — production Postgres runs on Fly.io.
+# The GenLayer contract deploys to GenLayer Studio directly (no Docker).
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: impactdna-postgres
+    environment:
+      POSTGRES_USER: impactdna
+      POSTGRES_PASSWORD: impactdna
+      POSTGRES_DB: impactdna
+    ports:
+      - "5439:5432"
+    volumes:
+      - impactdna_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U impactdna"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  impactdna_pgdata:
