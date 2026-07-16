@@ -279,6 +279,49 @@ contributionsRouter.get(
   }),
 );
 
+// -------------------------------------------------------------- my grants
+// The contract only exposes paginated list_grants (no per-wallet filter),
+// so we page through it server-side and match by wallet. Grant volume is
+// expected to stay small (one grant per eligible contribution per epoch).
+contributionsRouter.get(
+  "/grants/mine",
+  requireAuth,
+  wrap(async (req, res) => {
+    const found = await query("SELECT wallet_address FROM users WHERE id = $1", [req.user!.id]);
+    if (!found.rowCount) throw new HttpError(404, "User not found");
+    const wallet = String(found.rows[0].wallet_address).toLowerCase();
+
+    const mine: Array<Record<string, unknown>> = [];
+    const pageSize = 50;
+    const maxPages = 20; // safety cap: 1000 grants
+    let offset = 0;
+    for (let page = 0; page < maxPages; page++) {
+      const batch = (await contractRead("list_grants", [offset, pageSize], 30)) as {
+        total: number;
+        items: Array<Record<string, unknown>>;
+      };
+      for (const g of batch.items) {
+        if (String(g.wallet).toLowerCase() === wallet) mine.push(g);
+      }
+      offset += pageSize;
+      if (offset >= batch.total) break;
+    }
+
+    const payoutRows = await query(
+      "SELECT grant_id, status, tx_hash FROM grant_payouts WHERE grant_id = ANY($1)",
+      [mine.map((g) => String(g.id))],
+    );
+    const payoutByGrant = new Map(payoutRows.rows.map((r) => [String(r.grant_id), r]));
+
+    res.json({
+      items: mine.map((g) => ({
+        ...g,
+        payout: payoutByGrant.get(String(g.id)) ?? null,
+      })),
+    });
+  }),
+);
+
 function extractReturnedId(consensusData: unknown): string | null {
   if (typeof consensusData === "string" && consensusData.startsWith("c-")) return consensusData;
   if (consensusData && typeof consensusData === "object") {

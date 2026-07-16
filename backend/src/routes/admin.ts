@@ -135,6 +135,37 @@ adminRouter.post(
   }),
 );
 
+// -------------------------------------------------------- curator management (owner-gated on-chain)
+adminRouter.post(
+  "/curators",
+  requireRole("admin"),
+  rateLimit("admin-curators", 10, 3600),
+  validateBody(z.object({ address: z.string().trim().min(10).max(64) })),
+  wrap(async (req, res) => {
+    const { address } = req.body as { address: string };
+    const key = await adminKey(req.user!.id);
+    res.json({ ok: true, tx: await contractWrite(key, "add_curator", [address]) });
+  }),
+);
+
+adminRouter.delete(
+  "/curators/:address",
+  requireRole("admin"),
+  rateLimit("admin-curators", 10, 3600),
+  wrap(async (req, res) => {
+    const key = await adminKey(req.user!.id);
+    res.json({ ok: true, tx: await contractWrite(key, "remove_curator", [String(req.params.address)]) });
+  }),
+);
+
+adminRouter.get(
+  "/curators/:address",
+  wrap(async (req, res) => {
+    const isCurator = await contractRead("is_curator", [String(req.params.address)], { skipCache: true });
+    res.json({ address: req.params.address, isCurator });
+  }),
+);
+
 adminRouter.get(
   "/audit",
   wrap(async (_req, res) => {

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { GlassCard, StatCard, StatusChip, Spinner, ErrorNote } from "@/components/ui";
-import { api, API_URL, currentUser, getToken, shortAddr } from "@/lib/api";
+import { api, API_URL, currentUser, formatGen, getToken, shortAddr } from "@/lib/api";
 
 interface User {
   displayName: string;
@@ -22,6 +22,17 @@ interface Mine {
     status: string;
     tx_hash: string | null;
     created_at: string;
+  }>;
+}
+
+interface Grants {
+  items: Array<{
+    id: string;
+    epoch: string;
+    contribution: string;
+    amount_atto: string;
+    claimed: boolean;
+    payout: { status: string; tx_hash: string | null } | null;
   }>;
 }
 
@@ -43,6 +54,7 @@ function DashboardInner() {
   const searchParams = useSearchParams();
   const [user, setUser] = useState<User | null>(null);
   const [mine, setMine] = useState<Mine | null>(null);
+  const [grants, setGrants] = useState<Grants | null>(null);
   const [onchainDev, setOnchainDev] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -57,6 +69,7 @@ function DashboardInner() {
     setUser(u);
     if (!u) return;
     api<Mine>("/api/contributions/mine").then(setMine).catch(() => null);
+    api<Grants>("/api/contributions/grants/mine").then(setGrants).catch(() => null);
     if (u.githubUsername) {
       api<Record<string, unknown>>(`/api/platform/developers/${u.githubUsername}`, { auth: false })
         .then(setOnchainDev)
@@ -259,6 +272,42 @@ function DashboardInner() {
               </div>
             )}
           </GlassCard>
+
+          {/* My grants */}
+          {Boolean(grants?.items.length) && (
+            <GlassCard className="p-8">
+              <h2 className="text-xl font-semibold mb-6 flex items-center gap-3">
+                <span className="text-primary">04</span> My grants
+              </h2>
+              <div className="space-y-4">
+                {grants!.items.map((g) => (
+                  <div key={g.id}
+                    className="p-4 bg-surface-low border border-outline-variant/30 rounded-lg flex flex-col md:flex-row md:items-center justify-between gap-3">
+                    <div>
+                      <p className="font-mono text-on-surface">{g.id} <span className="text-on-variant text-xs">· {g.contribution}</span></p>
+                      <p className="font-mono text-sm text-green mt-1">{formatGen(g.amount_atto)} GEN</p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {g.claimed ? (
+                        <span className="font-mono text-xs text-green">
+                          ✓ claimed{g.payout?.status === "sent" ? " — GEN sent to your wallet" : g.payout?.status === "failed" ? " — payout retry pending" : ""}
+                        </span>
+                      ) : (
+                        <button className="btn-primary !py-1.5 !px-4 text-xs" disabled={busy !== ""}
+                          onClick={() =>
+                            run(`claim-${g.id}`, () =>
+                              api(`/api/contributions/grants/${g.id}/claim`, { method: "POST" }),
+                              "Grant claimed — your GEN payout is on its way.")
+                          }>
+                          {busy === `claim-${g.id}` ? "Claiming…" : "Claim"}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </GlassCard>
+          )}
         </div>
 
         {/* Right rail: wallet */}

@@ -17,7 +17,7 @@ const LINKS = [
 export function Nav() {
   const pathname = usePathname();
   const router = useRouter();
-  const [user, setUser] = useState<{ displayName?: string; walletAddress?: string } | null>(null);
+  const [user, setUser] = useState<{ displayName?: string; walletAddress?: string; role?: string } | null>(null);
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -45,6 +45,18 @@ export function Nav() {
                 {l.label}
               </Link>
             ))}
+            {(user?.role === "curator" || user?.role === "admin") && (
+              <Link
+                href="/admin"
+                className={
+                  pathname?.startsWith("/admin")
+                    ? "text-primary border-b-2 border-primary pb-1 text-sm"
+                    : "text-on-variant hover:text-primary transition-colors text-sm"
+                }
+              >
+                Admin
+              </Link>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-3">
