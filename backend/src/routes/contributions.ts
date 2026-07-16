@@ -7,6 +7,7 @@ import { requireAuth } from "../middleware/auth.js";
 import { rateLimit } from "../middleware/rateLimit.js";
 import { wrap, validateBody, HttpError } from "../middleware/errors.js";
 import { sendEmail, notifyEmail } from "../lib/email.js";
+import { sendGenPayout } from "../lib/treasury.js";
 import { logger } from "../lib/logger.js";
 
 /**
@@ -43,33 +44,19 @@ async function userWalletKey(userId: string): Promise<{ key: string; email: stri
 }
 
 // ------------------------------------------------- register on-chain identity
+// githubUsername is never taken as free text: it must already be linked
+// via the GitHub OAuth flow (see /api/auth/github/start), so a user can
+// only register the account they actually authenticated as.
 contributionsRouter.post(
   "/register-developer",
   requireAuth,
   rateLimit("chain-register", 5, 3600),
-  validateBody(
-    z.object({
-      githubUsername: z
-        .string()
-        .trim()
-        .regex(/^[A-Za-z\d](?:[A-Za-z\d]|-(?=[A-Za-z\d])){0,38}$/, "invalid GitHub username"),
-      displayName: z.string().trim().min(2).max(60),
-    }),
-  ),
+  validateBody(z.object({ displayName: z.string().trim().min(2).max(60) })),
   wrap(async (req, res) => {
-    const { githubUsername, displayName } = req.body as {
-      githubUsername: string;
-      displayName: string;
-    };
-    const { key } = await userWalletKey(req.user!.id);
-    const result = await contractWrite(key, "register_developer", [
-      githubUsername.toLowerCase(),
-      displayName,
-    ]);
-    await query("UPDATE users SET github_username = $1, updated_at = now() WHERE id = $2", [
-      githubUsername.toLowerCase(),
-      req.user!.id,
-    ]);
+    const { displayName } = req.body as { displayName: string };
+    const { key, github } = await userWalletKey(req.user!.id);
+    if (!github) throw new HttpError(400, "Connect your GitHub account first");
+    const result = await contractWrite(key, "register_developer", [github, displayName]);
     res.json({ ok: true, tx: result });
   }),
 );
@@ -198,14 +185,52 @@ contributionsRouter.post(
   requireAuth,
   rateLimit("chain-claim", 10, 3600),
   wrap(async (req, res) => {
+    const grantId = String(req.params.grantId);
     const { key, email } = await userWalletKey(req.user!.id);
-    const result = await contractWrite(key, "claim_grant", [String(req.params.grantId)]);
+    const result = await contractWrite(key, "claim_grant", [grantId]);
+
+    // On-chain claim is now the authoritative, tamper-evident record.
+    // The matching real GEN payout is a plain native-value transfer from
+    // the treasury wallet (contracts can't send value back out — see
+    // lib/treasury.ts). Recorded in grant_payouts for auditability and
+    // so a failed send can be retried without re-claiming on-chain.
+    let payout: { status: string; txHash: string | null; error?: string } = {
+      status: "pending",
+      txHash: null,
+    };
+    try {
+      const grant = (await contractRead("get_grant", [grantId], { skipCache: true })) as {
+        wallet: string;
+        amount_atto: string;
+      };
+      const txHash = await sendGenPayout(grant.wallet, BigInt(grant.amount_atto));
+      await query(
+        `INSERT INTO grant_payouts (grant_id, wallet, amount_atto, tx_hash, status)
+         VALUES ($1,$2,$3,$4,'sent')
+         ON CONFLICT (grant_id) DO UPDATE SET tx_hash = $4, status = 'sent', updated_at = now()`,
+        [grantId, grant.wallet, grant.amount_atto, txHash],
+      );
+      payout = { status: "sent", txHash };
+    } catch (err) {
+      logger.error({ err, grantId }, "treasury payout failed after on-chain claim");
+      await query(
+        `INSERT INTO grant_payouts (grant_id, wallet, amount_atto, status, error)
+         VALUES ($1, '', '0', 'failed', $2)
+         ON CONFLICT (grant_id) DO UPDATE SET status = 'failed', error = $2, updated_at = now()`,
+        [grantId, err instanceof Error ? err.message : String(err)],
+      );
+      payout = { status: "failed", txHash: null, error: "Payout delayed — will be retried" };
+    }
+
     const mail = notifyEmail(
       "Grant claimed",
-      `Your retroactive funding grant <b>${String(req.params.grantId)}</b> has been claimed on-chain.`,
+      `Your retroactive funding grant <b>${grantId}</b> has been claimed on-chain.` +
+        (payout.status === "sent"
+          ? " Your GEN payout has been sent to your wallet."
+          : " Your payout is being processed and will arrive shortly."),
     );
     void sendEmail({ to: email, ...mail, kind: "grant_claimed", userId: req.user!.id });
-    res.json({ ok: true, tx: result });
+    res.json({ ok: true, tx: result, payout });
   }),
 );
 

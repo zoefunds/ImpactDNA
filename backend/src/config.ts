@@ -19,11 +19,16 @@ const EnvSchema = z.object({
   BREVO_SENDER_NAME: z.string().default("ImpactDNA"),
 
   FRONTEND_URL: z.string().url().default("http://localhost:3000"),
+  BACKEND_URL: z.string().url().default("http://localhost:8080"),
   CORS_ORIGINS: z.string().default("http://localhost:3000"),
 
   GENLAYER_RPC_URL: z.string().url().default("https://studio.genlayer.com/api"),
   GENLAYER_CONTRACT_ADDRESS: z.string().default(""),
   GENLAYER_NETWORK: z.string().default("studionet"),
+
+  GITHUB_CLIENT_ID: z.string().default(""),
+  GITHUB_CLIENT_SECRET: z.string().default(""),
+  GITHUB_OAUTH_CALLBACK_URL: z.string().url().optional(),
 
   ACCESS_TOKEN_TTL: z.string().default("2h"),
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(30),
@@ -47,3 +52,5 @@ if (!parsed.success) {
 
 export const config = parsed.data;
 export const isProd = config.NODE_ENV === "production";
+export const githubCallbackUrl =
+  config.GITHUB_OAUTH_CALLBACK_URL || `${config.BACKEND_URL}/api/auth/github/callback`;

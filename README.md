@@ -10,7 +10,7 @@ ImpactDNA flips the traditional grants model: instead of funding proposals befor
 |---|---|
 | **Web app** | [impactdna.vercel.app](https://impactdna.vercel.app) |
 | **REST API** (24/7) | [impactdna-api.fly.dev](https://impactdna-api.fly.dev) |
-| **Intelligent Contract** | [`0xAa14d19Ad58AdB34b34B22936E1B0640EF951648`](https://studio.genlayer.com) — GenLayer StudioNet (gasless) |
+| **Intelligent Contract** | [`0x8284169B3c5E5c03A893Ea6b087661b2Ebd1e24f`](https://studio.genlayer.com) — GenLayer StudioNet (gasless) |
 | **Contract owner / curator** | `0x7401c129EDfc26E68FE19309fE461eb3Db1058Eb` (GenLayer Studio account) |
 
 Constructor: `platform_name="Impact_DNA"`, `min_eligible_score=40`.

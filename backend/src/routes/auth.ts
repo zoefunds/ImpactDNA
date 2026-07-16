@@ -1,4 +1,5 @@
 import { Router } from "express";
+import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { query } from "../db.js";
@@ -10,6 +11,13 @@ import { signAccessToken, requireAuth } from "../middleware/auth.js";
 import { rateLimit } from "../middleware/rateLimit.js";
 import { wrap, validateBody, HttpError } from "../middleware/errors.js";
 import { logger } from "../lib/logger.js";
+import {
+  githubConfigured,
+  signOAuthState,
+  verifyOAuthState,
+  buildAuthorizeUrl,
+  exchangeCodeForProfile,
+} from "../lib/githubOAuth.js";
 
 export const authRouter = Router();
 
@@ -204,6 +212,68 @@ authRouter.post(
     await query("UPDATE refresh_tokens SET revoked = TRUE WHERE user_id = $1", [row.user_id]);
     await audit(String(row.user_id), "reset_password", req.ip, {});
     res.json({ ok: true });
+  }),
+);
+
+// ---------------------------------------------------------- github oauth
+// Replaces free-text GitHub username entry: a user can only link an
+// account they can actually authenticate as via GitHub's own login.
+authRouter.get(
+  "/github/start",
+  rateLimit("github-oauth-start", 20, 3600),
+  wrap(async (req, res) => {
+    if (!githubConfigured()) throw new HttpError(503, "GitHub OAuth is not configured yet");
+    const token = String(req.query.token ?? "");
+    let userId: string;
+    try {
+      const payload = jwt.verify(token, config.JWT_SECRET, { issuer: "impactdna" }) as jwt.JwtPayload;
+      userId = String(payload.sub);
+    } catch {
+      throw new HttpError(401, "Invalid or expired session");
+    }
+    const state = signOAuthState(userId);
+    res.redirect(buildAuthorizeUrl(state));
+  }),
+);
+
+authRouter.get(
+  "/github/callback",
+  rateLimit("github-oauth-callback", 30, 3600),
+  wrap(async (req, res) => {
+    const code = String(req.query.code ?? "");
+    const state = String(req.query.state ?? "");
+    const fail = (reason: string) =>
+      res.redirect(`${config.FRONTEND_URL}/dashboard?github=error&reason=${encodeURIComponent(reason)}`);
+
+    if (!code || !state) return fail("missing_code_or_state");
+
+    let userId: string;
+    try {
+      userId = verifyOAuthState(state);
+    } catch {
+      return fail("invalid_state");
+    }
+
+    let profile;
+    try {
+      profile = await exchangeCodeForProfile(code);
+    } catch (err) {
+      logger.warn({ err }, "github oauth exchange failed");
+      return fail("github_exchange_failed");
+    }
+
+    const taken = await query(
+      "SELECT id FROM users WHERE github_id = $1 AND id <> $2",
+      [profile.id, userId],
+    );
+    if (taken.rowCount) return fail("github_account_already_linked");
+
+    await query(
+      "UPDATE users SET github_username = $1, github_id = $2, updated_at = now() WHERE id = $3",
+      [profile.login, profile.id, userId],
+    );
+    await audit(userId, "github_linked", req.ip, { githubId: profile.id, login: profile.login });
+    res.redirect(`${config.FRONTEND_URL}/dashboard?github=connected`);
   }),
 );
 

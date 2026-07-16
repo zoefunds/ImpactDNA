@@ -8,3 +8,5 @@ dist/
 .DS_Store
 .vercel
 coverage/
+__pycache__/
+*.pyc

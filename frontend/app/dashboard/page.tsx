@@ -1,10 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useState } from "react";
 import { GlassCard, StatCard, StatusChip, Spinner, ErrorNote } from "@/components/ui";
-import { api, currentUser, getToken, shortAddr } from "@/lib/api";
+import { api, API_URL, currentUser, getToken, shortAddr } from "@/lib/api";
 
 interface User {
   displayName: string;
@@ -31,7 +31,16 @@ const CATEGORIES = [
 ];
 
 export default function Dashboard() {
+  return (
+    <Suspense fallback={<Spinner />}>
+      <DashboardInner />
+    </Suspense>
+  );
+}
+
+function DashboardInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [user, setUser] = useState<User | null>(null);
   const [mine, setMine] = useState<Mine | null>(null);
   const [onchainDev, setOnchainDev] = useState<Record<string, unknown> | null>(null);
@@ -39,7 +48,6 @@ export default function Dashboard() {
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState("");
 
-  const [github, setGithub] = useState("");
   const [submitForm, setSubmitForm] = useState({ repo: "", category: "library", description: "" });
   const [exportPw, setExportPw] = useState("");
   const [exportedKey, setExportedKey] = useState("");
@@ -68,6 +76,16 @@ export default function Dashboard() {
       })
       .catch(() => router.push("/login"));
   }, [router, refresh]);
+
+  useEffect(() => {
+    const github = searchParams.get("github");
+    if (github === "connected") setNotice("GitHub account connected. You can now register on-chain.");
+    else if (github === "error") {
+      const reason = searchParams.get("reason") ?? "unknown_error";
+      setError(`GitHub connection failed: ${reason.replace(/_/g, " ")}`);
+    }
+    if (github) router.replace("/dashboard");
+  }, [searchParams, router]);
 
   async function run(name: string, fn: () => Promise<unknown>, doneMsg: string) {
     setError("");
@@ -129,19 +147,24 @@ export default function Dashboard() {
               <span className="text-primary">01</span> On-chain developer identity
             </h2>
             <p className="text-on-variant text-sm mb-6">
-              Register your GitHub username, then verify it — validators fetch your GitHub profile
-              inside consensus to prove it exists and matches.
+              Connect your GitHub account (OAuth — we never accept a typed username, so you can
+              only link the account you actually control), register it on-chain, then verify it —
+              validators fetch your GitHub profile inside consensus to prove it exists and matches.
             </p>
             {!user.githubUsername ? (
-              <div className="flex flex-col sm:flex-row gap-3">
-                <input className="input-field sm:max-w-xs" placeholder="github username"
-                  value={github} onChange={(e) => setGithub(e.target.value)} />
-                <button className="btn-primary" disabled={busy !== "" || !github}
+              <a className="btn-primary inline-flex items-center gap-2"
+                href={`${API_URL}/api/auth/github/start?token=${encodeURIComponent(getToken() ?? "")}`}>
+                Connect GitHub
+              </a>
+            ) : !onchainDev ? (
+              <div className="flex items-center gap-4">
+                <span className="font-mono text-sm text-on-variant">@{user.githubUsername} connected</span>
+                <button className="btn-primary" disabled={busy !== ""}
                   onClick={() =>
                     run("register", () =>
                       api("/api/contributions/register-developer", {
                         method: "POST",
-                        body: { githubUsername: github, displayName: user.displayName },
+                        body: { displayName: user.displayName },
                       }), "Developer registered on-chain. Now verify your identity.")
                   }>
                   {busy === "register" ? "Submitting to GenLayer…" : "Register on-chain"}

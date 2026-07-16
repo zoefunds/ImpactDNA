@@ -52,7 +52,7 @@ const SECTIONS: Array<{ title: string; body: string[]; code?: string }> = [
     body: [
       "Deployed on GenLayer StudioNet. Key write methods: register_developer, verify_developer, submit_contribution, evaluate_contribution, detect_manipulation (curator), open_epoch / close_epoch (curator), claim_grant, request_appeal, resolve_appeal (curator). Key views: get_platform_info, get_contribution, list_contributions, get_leaderboard, list_epochs, list_grants, get_audit_log.",
     ],
-    code: `Contract: 0xAa14d19Ad58AdB34b34B22936E1B0640EF951648
+    code: `Contract: 0x8284169B3c5E5c03A893Ea6b087661b2Ebd1e24f
 Network:  GenLayer StudioNet (gasless)
 Source:   contracts/impact_dna.py — 1,500+ lines, genvm-lint clean`,
   },

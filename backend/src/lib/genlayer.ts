@@ -102,6 +102,7 @@ export async function contractWrite(
   privateKey: string,
   functionName: string,
   args: unknown[] = [],
+  valueAtto: bigint = BigInt(0),
 ): Promise<WriteResult> {
   if (!contractConfigured()) {
     throw Object.assign(new Error("Intelligent contract address not configured yet"), {
@@ -113,7 +114,7 @@ export async function contractWrite(
     address: config.GENLAYER_CONTRACT_ADDRESS,
     functionName,
     args: args as never[],
-    value: BigInt(0),
+    value: valueAtto,
   } as never);
   logger.info({ functionName, txHash }, "genlayer write submitted");
 

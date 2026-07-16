@@ -4,7 +4,7 @@ A running log of decisions, state, and operational facts. Update as the project 
 
 ## Deployed state
 
-- **Intelligent Contract**: `0xAa14d19Ad58AdB34b34B22936E1B0640EF951648` on **GenLayer StudioNet** (gasless).
+- **Intelligent Contract**: `0x8284169B3c5E5c03A893Ea6b087661b2Ebd1e24f` on **GenLayer StudioNet** (gasless).
   - Constructor used: `platform_name="Impact_DNA"`, `min_eligible_score=40`.
   - Contract owner / first curator: `0x7401c129EDfc26E68FE19309fE461eb3Db1058Eb` (the Studio deployer account).
   - Previous deployment (superseded): `0x2403a1bCc526AC1370a5577c5c4712F5Af1F5749` (gate was 0).
@@ -35,6 +35,21 @@ A running log of decisions, state, and operational facts. Update as the project 
   the chain is the source of truth.
 - **Email**: Brevo HTTP API, sender `preciousmofeoluwa@gmail.com` — welcome,
   password-reset (30-min one-time token), submission/evaluation notifications.
+- **GitHub identity is OAuth-only, not free text**: `/api/auth/github/start` (redirect,
+  token via query since it's a browser navigation) → GitHub → `/api/auth/github/callback`
+  stores `github_username` + `github_id` (unique) on the user row. Prevents a user
+  typing someone else's username. `register_developer` reads the OAuth-linked
+  username server-side; it no longer accepts a client-supplied one.
+- **Real GEN custody is off-chain (treasury wallet), not in the contract**: confirmed
+  by introspecting the live GenVM runtime that `gl.evm` has no transfer/send primitive
+  and `gl.message` is read-only — a contract can receive value (`payable`) but can
+  never send it back out, so making `deposit_to_treasury` payable would trap funds
+  forever (tried this, reverted it). The contract stays the ledger of truth (grants,
+  claims); `backend/src/lib/treasury.ts` holds an encrypted EOA (`treasury_wallet`
+  table) that executes real payouts as plain `sendTransaction` calls when a developer's
+  on-chain `claim_grant` finalizes. Verified end-to-end on StudioNet: balance actually
+  moved between two throwaway wallets. Failed payouts are tracked in `grant_payouts`
+  and retryable via `POST /api/admin/grant-payouts/:grantId/retry`.
 
 ## Operational notes
 

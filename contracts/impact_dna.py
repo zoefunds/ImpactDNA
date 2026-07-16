@@ -560,10 +560,15 @@ class ImpactDNA(gl.Contract):
 
     @gl.public.write
     def deposit_to_treasury(self, atto_amount: int) -> None:
-        """Record a treasury deposit (internal accounting in atto units).
-        On StudioNet (gasless), value transfer is simulated via this
-        curator-controlled ledger; on token networks this pairs with a
-        native transfer performed by the funding multisig."""
+        """Record a treasury deposit (ledger accounting, atto units).
+
+        GenVM does not currently expose a way for contract code to send
+        native value back out once received (confirmed by introspecting
+        the runtime: gl.evm has no transfer/send primitive, and
+        gl.message only exposes read-only fields) — so holding real GEN
+        inside the contract would permanently trap it. Real GEN custody
+        and payouts are handled by an off-chain treasury wallet; this
+        ledger is the authoritative record of what it owes and to whom."""
         self._require_curator()
         if atto_amount <= 0:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Deposit must be positive")
@@ -1187,10 +1192,11 @@ Return ONLY JSON:
 
     @gl.public.write
     def claim_grant(self, grant_id: str) -> dict:
-        """Mark a grant claimed by its recipient wallet. (On gasless
-        StudioNet this finalizes the ledger entry; on token networks the
-        payout leg is executed by the treasury runner against this
-        on-chain claim record.)"""
+        """Mark a grant claimed by its recipient wallet. This is the
+        authoritative, tamper-evident record that the grant is owed and
+        claimed; the backend's treasury wallet executes the matching
+        real GEN transfer as a plain native-value transaction once this
+        call finalizes (see docs/DEPLOYMENT.md — Treasury payouts)."""
         self._require_not_paused()
         grant = self._load("grant", grant_id)
         if grant["claimed"]:
