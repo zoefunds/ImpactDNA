@@ -29,7 +29,7 @@ adminRouter.post(
   wrap(async (req, res) => {
     const { poolAtto, label } = req.body as { poolAtto: string; label: string };
     const key = await adminKey(req.user!.id);
-    res.json({ ok: true, tx: await contractWrite(key, "open_epoch", [poolAtto, label]) });
+    res.json({ ok: true, tx: await contractWrite(key, "open_epoch", [BigInt(poolAtto), label]) });
   }),
 );
 
@@ -50,7 +50,7 @@ adminRouter.post(
     const key = await adminKey(req.user!.id);
     res.json({
       ok: true,
-      tx: await contractWrite(key, "deposit_to_treasury", [(req.body as { atto: string }).atto]),
+      tx: await contractWrite(key, "deposit_to_treasury", [BigInt((req.body as { atto: string }).atto)]),
     });
   }),
 );
