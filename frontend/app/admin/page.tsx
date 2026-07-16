@@ -18,6 +18,7 @@ interface PlatformInfo {
   current_epoch: string;
   treasury_atto: string;
   epoch_count: number;
+  min_eligible_score: number;
 }
 
 interface Payout {
@@ -43,6 +44,7 @@ export default function Admin() {
   const [poolGen, setPoolGen] = useState("");
   const [epochLabel, setEpochLabel] = useState("");
   const [curatorAddr, setCuratorAddr] = useState("");
+  const [minScore, setMinScore] = useState("");
 
   const refresh = useCallback(async () => {
     await Promise.all([
@@ -164,6 +166,28 @@ export default function Admin() {
           )}
         </GlassCard>
       </section>
+
+      {user.role === "admin" && (
+        <GlassCard className="p-8">
+          <h2 className="text-xl font-semibold mb-1">Eligibility gate</h2>
+          <p className="text-on-variant text-sm mb-4">
+            Minimum impact score (0–100) a contribution must clear to compete for funding.
+            Currently <span className="text-primary font-mono">{info?.min_eligible_score ?? "—"}</span>.
+          </p>
+          <div className="flex flex-col sm:flex-row gap-3">
+            <input className="input-field sm:max-w-xs" placeholder="new score (0-100)"
+              value={minScore} onChange={(e) => setMinScore(e.target.value)} />
+            <button className="btn-primary" disabled={busy !== "" || minScore === ""}
+              onClick={() =>
+                run("min-score", () =>
+                  api("/api/admin/config/min-eligible-score", { method: "POST", body: { score: Number(minScore) } }),
+                  "Eligibility gate updated.")
+              }>
+              {busy === "min-score" ? "Updating…" : "Update gate"}
+            </button>
+          </div>
+        </GlassCard>
+      )}
 
       {user.role === "admin" && (
         <GlassCard className="p-8">

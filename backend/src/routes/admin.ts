@@ -173,6 +173,20 @@ adminRouter.get(
   }),
 );
 
+adminRouter.post(
+  "/config/min-eligible-score",
+  requireRole("admin"),
+  rateLimit("admin-config", 10, 3600),
+  validateBody(z.object({ score: z.number().int().min(0).max(100) })),
+  wrap(async (req, res) => {
+    const { score } = req.body as { score: number };
+    const key = await adminKey(req.user!.id);
+    const tx = await contractWrite(key, "set_min_eligible_score", [score]);
+    await invalidateRead("get_platform_info");
+    res.json({ ok: true, tx });
+  }),
+);
+
 adminRouter.get(
   "/audit",
   wrap(async (_req, res) => {
