@@ -2,37 +2,42 @@
 
 **Retroactive Public Goods Funding on GenLayer.**
 
-ImpactDNA flips the traditional grants model: instead of funding proposals before work begins, it evaluates open-source repositories *after* release and rewards the ones that became genuinely foundational. The subjective judgment — is this work original, adopted, influential? — is performed entirely by a **GenLayer Intelligent Contract**: validators independently fetch live GitHub evidence and score impact with LLM reasoning, reaching consensus before anything is recorded or funded.
+ImpactDNA flips the traditional grants model: instead of funding proposals before work begins, it evaluates open-source repositories *after* release and rewards the ones that became genuinely foundational. The subjective judgment — is this work original, adopted, influential? — is performed entirely by a **GenLayer Intelligent Contract**: validators independently fetch live GitHub evidence and score impact with LLM reasoning, reaching consensus before anything is recorded or funded. Grants are then paid out in **real GEN**, sent by a backend-held treasury wallet once a developer claims them on-chain.
+
+![Landing page](docs/screenshots/landing.png)
 
 ## Live deployment
 
 | Component | URL / Address |
 |---|---|
 | **Web app** | [impactdna.vercel.app](https://impactdna.vercel.app) |
-| **REST API** (24/7) | [impactdna-api.fly.dev](https://impactdna-api.fly.dev) |
-| **Intelligent Contract** | [`0x8284169B3c5E5c03A893Ea6b087661b2Ebd1e24f`](https://studio.genlayer.com) — GenLayer StudioNet (gasless) |
-| **Contract owner / curator** | `0x7401c129EDfc26E68FE19309fE461eb3Db1058Eb` (GenLayer Studio account) |
+| **REST API** (24/7, health-checked) | [impactdna-api.fly.dev](https://impactdna-api.fly.dev) |
+| **Intelligent Contract** | [`0x2B4DE4E66Bbfbe173b6E511583d5A66f7BF58267`](https://studio.genlayer.com) — GenLayer StudioNet (gasless) |
+| **Contract owner / curator** | `0x07E130Bd4bB1dCbB97558FCcDC47F14a58d05Fa7` |
+| **Treasury wallet** (real GEN custody) | `0xb062F2d0B911EDaAD359e00D7940bd5e954973aE` — backend-held, AES-256-GCM encrypted key |
 
-Constructor: `platform_name="Impact_DNA"`, `min_eligible_score=40`.
+Constructor: `platform_name="Impact_DNA"`, `min_eligible_score=40` (owner-adjustable from the admin panel).
 
-### End-to-end verification (real on-chain transactions)
+### End-to-end verification (real on-chain transactions, this deployment)
 
-Every step of the lifecycle has been exercised against the live contract with 5-validator consensus:
+Every step of the lifecycle has been exercised against the live contract with 5-validator consensus, including a real GEN payout:
 
-| Step | Tx hash | Result |
-|---|---|---|
-| `register_developer("zoefunds")` | `0xf9251a…c9b263` | unanimous agree |
-| `verify_developer` — validators fetch `api.github.com/users/zoefunds` in-consensus | `0x6fea46…ae86fe` | verified |
-| `submit_contribution("zoefunds/OracleRot")` | `0xe1d843…511145` | id `c-1` |
-| `evaluate_contribution("c-1")` — LLM + live GitHub evidence | `0x937a53…735cc8` | **14/100 — rejected** |
-| `request_appeal("c-1")` | `0xecf353…68b97d` | appeal `a-1` open |
+| Step | Result |
+|---|---|
+| GitHub OAuth connect + `register_developer` + `verify_developer` | `@zoefunds` verified by validator consensus |
+| `submit_contribution("zoefunds/care-bridge")` → `evaluate_contribution` | **15/100 — rejected** (zero stars/forks, no license) |
+| `submit_contribution("zoefunds/trap-net")` → `evaluate_contribution` | **4/100** — eligible once curator lowered the score gate for testing |
+| `open_epoch` (Season 1, 50 GEN pool) → `close_epoch` | quadratic settlement → grant `g-1` |
+| `claim_grant("g-1")` | on-chain claim + **real 50 GEN transfer** from treasury wallet, confirmed by tx receipt |
+| `detect_manipulation`, `request_appeal` / `resolve_appeal` | both exercised live; appeal correctly denied without contradicting evidence |
 
-The rejection demonstrates the system working as designed: an 8-day-old repo with zero stars, no forks, no downstream dependents, and no license scored 14/100 against a 40-point eligibility gate. The contract evaluates real evidence — it does not rubber-stamp submissions.
+The rejections demonstrate the system working as designed — thin, unadopted repositories score low against a real eligibility gate rather than being rubber-stamped.
 
 ## How it works
 
 ```
-Developer registers + verifies GitHub identity (on-chain, consensus)
+Developer connects GitHub via OAuth (never a typed username — you can only
+link an account you actually control) + registers + verifies on-chain
          |
          v
 Submits a repository with category + description
@@ -44,11 +49,17 @@ Hard gates (fork/ownership/eligibility) must match exactly; scores must land
 in the same or adjacent 25-point bucket.
          |
          v
-Score >= 40 --> eligible for funding
-Score < 40  --> rejected (appeal available once)
+Score >= gate --> eligible for funding   |   Score < gate --> rejected (appeal available once)
          |
          v
-Curator opens epoch --> pool split by quadratic weight (score^2)
+Curator deposits real GEN to the treasury wallet + opens an epoch with a pool
+         |
+         v
+Curator closes epoch --> pool split deterministically by quadratic weight (score^2)
+         |
+         v
+Developer claims grant on-chain --> backend sends real GEN from the treasury
+wallet to the developer's wallet (retryable if the transfer fails)
 ```
 
 ### Impact dimensions (0-20 each, 100 total)
@@ -67,7 +78,8 @@ Curator opens epoch --> pool split by quadratic weight (score^2)
 - Non-owned repos: capped below the eligibility gate
 - Volatile metrics (stars/forks): enter evidence only as order-of-magnitude buckets
 - Duplicate repos and per-developer submission caps enforced in contract state
-- Curator-triggered manipulation screening with comparative validation
+- Curator-triggered manipulation screening (`detect_manipulation`) with comparative validation, immutable once funded
+- Appeals (`request_appeal` / `resolve_appeal`) require *fresh evidence that materially contradicts the original decision* — a well-argued complaint alone is denied
 
 ### Consensus reliability
 
@@ -83,22 +95,53 @@ Every judgment that matters happens inside the contract under multi-validator co
 
 An off-chain AI could score repositories, but there would be no way to verify that the scoring was honest, consistent, or tamper-proof. GenLayer makes every evaluation auditable and adversarially robust.
 
+## Real GEN payouts (not just ledger accounting)
+
+GenVM Intelligent Contracts can *receive* native value (`@gl.public.write.payable`) but expose no primitive to send it back out — confirmed by introspecting the runtime (`gl.evm` has no `emit_transfer`; `gl.message` is read-only). So the contract stays the authoritative ledger (grants, claims, eligibility), while a **backend-held treasury wallet** — a plain EOA, private key AES-256-GCM encrypted at rest — executes real native-value transfers via `sendTransaction` once a grant is claimed on-chain:
+
+1. Curator sends real GEN to the treasury address, then records the deposit on-chain (`deposit_to_treasury`) for bookkeeping.
+2. Developer calls `claim_grant` on-chain — this is the authoritative, tamper-evident record of the claim.
+3. The backend sends the matching real GEN transfer from the treasury wallet immediately after.
+4. If the transfer fails (network hiccup, RPC congestion), it's recorded in `grant_payouts` as `failed` with the error, and a curator can retry from the admin panel without re-claiming on-chain.
+
+## Screenshots
+
+| Dashboard | Contribution Explorer |
+|---|---|
+| ![Dashboard](docs/screenshots/dashboard.png) | ![Contribution Explorer](docs/screenshots/contribution-explorer.png) |
+
+| Funding Explorer | Curator Admin panel |
+|---|---|
+| ![Funding Explorer](docs/screenshots/funding-explorer.png) | ![Admin panel](docs/screenshots/admin-panel.png) |
+
+## Curator admin panel
+
+A dedicated `/admin` panel (curator/admin role required) replaces manual Studio/CLI calls for day-to-day operation:
+
+- **Treasury wallet** — displays the real-GEN custody address; record a GEN-denominated deposit (converted to atto client-side, no more typing 18-zero atto strings)
+- **Funding epoch** — open a round with a GEN pool size and label, or close the open epoch to settle grants
+- **Eligibility gate** (admin only) — adjust `min_eligible_score` (0–100) as the platform's repo pool matures
+- **Curator management** (admin only) — add/remove curators on-chain; owner-gated by the contract itself
+- **Grant payouts** — live list of every claim's real-GEN transfer status, with a one-click retry for failed sends
+
 ## Repository layout
 
 ```
-contracts/impact_dna.py    Intelligent Contract (1,557 lines, 33 public methods,
-                           genvm-lint clean, pinned runner hash)
+contracts/impact_dna.py    Intelligent Contract (1,500+ lines, genvm-lint clean,
+                           pinned runner hash)
 backend/                   Node 20 + TypeScript + Express (Fly.io, 24/7)
-  src/routes/              Auth, contributions, platform, funding endpoints
-  src/lib/                 GenLayer client, wallet encryption, email, Redis, logger
-  src/middleware/          JWT auth, rate limiting, error handling
-  migrations/              Forward-only SQL migrations (run at boot)
+  src/routes/               Auth (incl. GitHub OAuth), contributions, platform,
+                            admin (curator/treasury/eligibility ops)
+  src/lib/                  GenLayer client, treasury (real GEN custody + payouts),
+                            wallet encryption, GitHub OAuth, email, Redis, logger
+  src/middleware/           JWT auth, rate limiting, error handling
+  migrations/                Forward-only SQL migrations (run at boot)
 frontend/                  Next.js 14 + Tailwind CSS (Vercel)
-  app/                     Landing, dashboard, explorer, contribution detail,
-                           funding, developers, docs, auth pages
-  components/              Glassmorphism UI kit, nav, footer, auth shell
-docs/                      ARCHITECTURE.md, DEPLOYMENT.md, API.md
-.github/workflows/ci.yml  Contract lint + backend & frontend builds
+  app/                      Landing, dashboard, explorer, contribution detail,
+                            funding, developers, docs, auth pages, admin panel
+  components/               Glassmorphism UI kit, nav, footer, auth shell
+docs/                       ARCHITECTURE.md, DEPLOYMENT.md, API.md, screenshots/
+.github/workflows/ci.yml   Contract lint + backend & frontend builds
 docker-compose.yml         Local PostgreSQL (port 5439)
 ```
 
@@ -110,16 +153,20 @@ docker-compose.yml         Local PostgreSQL (port 5439)
 | Backend | Node.js 20, TypeScript, Express, PostgreSQL, Upstash Redis, Brevo |
 | Frontend | Next.js 14, React 18, Tailwind CSS, TypeScript |
 | Infrastructure | Fly.io (24/7), Vercel, Docker, GitHub Actions CI |
-| Crypto | ethers.js (wallet generation), AES-256-GCM (key encryption), bcrypt(12) |
-| Chain interaction | genlayer-js v1.1.8 SDK |
+| Crypto | ethers.js (wallet generation + treasury payouts), AES-256-GCM (key encryption), bcrypt(12) |
+| Chain interaction | genlayer-js SDK |
+| Identity | GitHub OAuth 2.0 (signed, short-lived state JWT — no typed usernames) |
+| Email | Brevo transactional HTTP API, every send logged to `notification_log` |
 
 ## Platform features
 
+- **GitHub OAuth developer identity** — users connect via OAuth (never a typed username), so an account can only be linked by someone who actually controls it; `github_id` is uniquely constrained so one GitHub account can't be linked to multiple ImpactDNA accounts.
 - **Email + password auth** with JWT access tokens (15-min) and rotating refresh tokens (7-day). Brevo-powered password reset with 30-minute one-time tokens.
 - **Permanent custodial wallets**: generated at signup with ethers, AES-256-GCM encrypted at rest. Address never changes, survives device/browser resets. Private-key export requires password re-confirmation. StudioNet is gasless, so users transact without holding tokens.
-- **Transactional email** via Brevo HTTP API: welcome, password reset, submission confirmation, evaluation results.
-- **Conservative Redis usage** (Upstash, billed per command): single lazy connection, in-process micro-cache (Map, max 500 entries) in front of every read, TTL on all keys, fixed-window rate limiter costing 1-2 commands per hit, graceful degradation to in-memory if Redis is unreachable.
-- **24/7 backend**: Fly.io with `auto_stop_machines="off"`, `min_machines_running=1`, restart policy `always`, `/health` endpoint checked every 30 seconds.
+- **Real GEN treasury and payouts**: a backend-held EOA wallet executes actual native-value transfers when grants are claimed — see [Real GEN payouts](#real-gen-payouts-not-just-ledger-accounting) above.
+- **Transactional email** via Brevo HTTP API: welcome, password reset, submission confirmation, evaluation results, grant claimed — every send (success or failure) logged to `notification_log`.
+- **Conservative Redis usage** (Upstash, billed per command): single lazy connection, in-process micro-cache (Map, max 500 entries) in front of every read, TTL on all keys, fixed-window rate limiter costing 1-2 commands per hit, graceful degradation to in-memory if Redis is unreachable. Curator/treasury writes explicitly invalidate the cached platform-info read so the admin panel never shows stale state after an action.
+- **24/7 backend**: Fly.io with `auto_stop_machines="off"`, `min_machines_running=1`, restart policy `always`, `/health` endpoint checked every 30 seconds, externally monitored via UptimeRobot.
 - **Self-healing mirror**: the dashboard reads a local Postgres mirror table that automatically reconciles with authoritative on-chain records when stale data is detected.
 - **Security**: helmet, strict CORS allowlist, Zod validation on every input, bcrypt(12), RBAC (developer/curator/admin), audit logging on-chain and in Postgres, secret-redacting structured logs (pino), fail-fast environment validation.
 
@@ -135,22 +182,26 @@ cd ../frontend && npm install && npm run dev  # web on :3000
 
 ## Operating a funding round (curator)
 
-From GenLayer Studio or CLI, using the contract owner account:
+The recommended path is the **`/admin` panel** (see [screenshots](#screenshots) above) — deposit GEN, open/close epochs, and adjust the eligibility gate without leaving the app. The same operations are available directly against the contract for scripted or emergency use:
 
 ```bash
-# Deposit to treasury (amount in atto-GEN; 1000 GEN = 1e21 atto)
-genlayer write 0xAa14…1648 deposit_to_treasury --args 1000000000000000000000
+# Deposit to treasury ledger (amount in atto-GEN; 1 GEN = 1e18 atto)
+genlayer write 0x2B4D…8267 deposit_to_treasury --args 100000000000000000000
 
-# Open an epoch with a 500 GEN pool
-genlayer write 0xAa14…1648 open_epoch --args 500000000000000000000 "Genesis Round"
+# Open an epoch with a 50 GEN pool
+genlayer write 0x2B4D…8267 open_epoch --args 50000000000000000000 "Season 1"
 
 # Developers submit and evaluate during the epoch...
 
 # Close epoch — deterministic quadratic settlement
-genlayer write 0xAa14…1648 close_epoch
+genlayer write 0x2B4D…8267 close_epoch
 
-# Resolve any open appeals
-genlayer write 0xAa14…1648 resolve_appeal --args a-1
+# Resolve any open appeals / run a manipulation screen
+genlayer write 0x2B4D…8267 resolve_appeal --args a-1
+genlayer write 0x2B4D…8267 detect_manipulation --args c-1
+
+# Adjust the eligibility gate (owner only)
+genlayer write 0x2B4D…8267 set_min_eligible_score --args 40
 ```
 
 ## Documentation
