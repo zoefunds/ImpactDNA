@@ -73,3 +73,13 @@ export function formatGen(atto?: string | number | null): string {
     return String(atto);
   }
 }
+
+/** Parse a human GEN amount ("100" or "1.5") into an atto-unit integer string. */
+export function parseGen(gen: string): string {
+  const s = gen.trim();
+  if (!/^\d+(\.\d+)?$/.test(s)) throw new Error("Enter a valid GEN amount, e.g. 100 or 1.5");
+  const [whole, frac = ""] = s.split(".");
+  if (frac.length > 18) throw new Error("GEN amount has too many decimal places");
+  const fracPadded = frac.padEnd(18, "0");
+  return (BigInt(whole || "0") * 10n ** 18n + BigInt(fracPadded || "0")).toString();
+}

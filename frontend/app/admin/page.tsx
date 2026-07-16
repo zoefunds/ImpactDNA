@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { GlassCard, StatCard, Spinner, ErrorNote } from "@/components/ui";
-import { api, currentUser, formatGen, getToken } from "@/lib/api";
+import { api, currentUser, formatGen, parseGen, getToken } from "@/lib/api";
 
 interface User {
   role: string;
@@ -39,8 +39,8 @@ export default function Admin() {
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState("");
 
-  const [depositAtto, setDepositAtto] = useState("");
-  const [poolAtto, setPoolAtto] = useState("");
+  const [depositGen, setDepositGen] = useState("");
+  const [poolGen, setPoolGen] = useState("");
   const [epochLabel, setEpochLabel] = useState("");
   const [curatorAddr, setCuratorAddr] = useState("");
 
@@ -117,12 +117,12 @@ export default function Admin() {
             {treasury?.address ?? "—"}
           </p>
           <div className="flex flex-col sm:flex-row gap-3">
-            <input className="input-field sm:max-w-xs" placeholder="atto amount deposited"
-              value={depositAtto} onChange={(e) => setDepositAtto(e.target.value)} />
-            <button className="btn-primary" disabled={busy !== "" || !depositAtto}
+            <input className="input-field sm:max-w-xs" placeholder="GEN amount deposited (e.g. 100)"
+              value={depositGen} onChange={(e) => setDepositGen(e.target.value)} />
+            <button className="btn-primary" disabled={busy !== "" || !depositGen}
               onClick={() =>
                 run("deposit", () =>
-                  api("/api/admin/treasury/deposit", { method: "POST", body: { atto: depositAtto } }),
+                  api("/api/admin/treasury/deposit", { method: "POST", body: { atto: parseGen(depositGen) } }),
                   "Deposit recorded on-chain.")
               }>
               {busy === "deposit" ? "Recording…" : "Record deposit"}
@@ -137,14 +137,14 @@ export default function Admin() {
           </p>
           {!info?.current_epoch ? (
             <div className="space-y-3">
-              <input className="input-field" placeholder="pool amount (atto)"
-                value={poolAtto} onChange={(e) => setPoolAtto(e.target.value)} />
+              <input className="input-field" placeholder="pool amount in GEN (e.g. 100)"
+                value={poolGen} onChange={(e) => setPoolGen(e.target.value)} />
               <input className="input-field" placeholder="epoch label"
                 value={epochLabel} onChange={(e) => setEpochLabel(e.target.value)} />
-              <button className="btn-primary w-full" disabled={busy !== "" || !poolAtto || !epochLabel}
+              <button className="btn-primary w-full" disabled={busy !== "" || !poolGen || !epochLabel}
                 onClick={() =>
                   run("open", () =>
-                    api("/api/admin/epochs/open", { method: "POST", body: { poolAtto, label: epochLabel } }),
+                    api("/api/admin/epochs/open", { method: "POST", body: { poolAtto: parseGen(poolGen), label: epochLabel } }),
                     "Epoch opened.")
                 }>
                 {busy === "open" ? "Opening…" : "Open epoch"}
