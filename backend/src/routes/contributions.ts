@@ -198,11 +198,11 @@ contributionsRouter.post(
       status: "pending",
       txHash: null,
     };
+    const grant = (await contractRead("get_grant", [grantId], { skipCache: true })) as {
+      wallet: string;
+      amount_atto: string;
+    };
     try {
-      const grant = (await contractRead("get_grant", [grantId], { skipCache: true })) as {
-        wallet: string;
-        amount_atto: string;
-      };
       const txHash = await sendGenPayout(grant.wallet, BigInt(grant.amount_atto));
       await query(
         `INSERT INTO grant_payouts (grant_id, wallet, amount_atto, tx_hash, status)
@@ -215,9 +215,9 @@ contributionsRouter.post(
       logger.error({ err, grantId }, "treasury payout failed after on-chain claim");
       await query(
         `INSERT INTO grant_payouts (grant_id, wallet, amount_atto, status, error)
-         VALUES ($1, '', '0', 'failed', $2)
-         ON CONFLICT (grant_id) DO UPDATE SET status = 'failed', error = $2, updated_at = now()`,
-        [grantId, err instanceof Error ? err.message : String(err)],
+         VALUES ($1, $2, $3, 'failed', $4)
+         ON CONFLICT (grant_id) DO UPDATE SET status = 'failed', error = $4, updated_at = now()`,
+        [grantId, grant.wallet, grant.amount_atto, err instanceof Error ? err.message : String(err)],
       );
       payout = { status: "failed", txHash: null, error: "Payout delayed — will be retried" };
     }

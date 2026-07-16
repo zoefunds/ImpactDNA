@@ -67,6 +67,22 @@ adminRouter.get(
 );
 
 adminRouter.post(
+  "/treasury/test-send",
+  requireRole("admin"),
+  rateLimit("admin-treasury-test", 5, 3600),
+  validateBody(z.object({ toAddress: z.string().min(10).max(64), amountAtto: z.string().regex(/^\d+$/) })),
+  wrap(async (req, res) => {
+    const { toAddress, amountAtto } = req.body as { toAddress: string; amountAtto: string };
+    try {
+      const txHash = await sendGenPayout(toAddress, BigInt(amountAtto));
+      res.json({ ok: true, txHash });
+    } catch (err) {
+      res.json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  }),
+);
+
+adminRouter.post(
   "/grant-payouts/:grantId/retry",
   rateLimit("admin-payout-retry", 20, 3600),
   wrap(async (req, res) => {
