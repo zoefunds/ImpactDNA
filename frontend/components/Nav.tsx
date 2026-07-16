@@ -103,6 +103,11 @@ export function Nav() {
               {l.label}
             </Link>
           ))}
+          {(user?.role === "curator" || user?.role === "admin") && (
+            <Link href="/admin" className="text-on-variant hover:text-primary" onClick={() => setOpen(false)}>
+              Admin
+            </Link>
+          )}
         </div>
       )}
     </nav>
