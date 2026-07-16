@@ -3,7 +3,7 @@ import { studionet, localnet, testnetAsimov } from "genlayer-js/chains";
 import { TransactionStatus } from "genlayer-js/types";
 import { config } from "../config.js";
 import { logger } from "./logger.js";
-import { cacheGet, cacheSet } from "../redis.js";
+import { cacheGet, cacheSet, cacheDel } from "../redis.js";
 
 /**
  * GenLayer integration.
@@ -90,6 +90,10 @@ export async function contractRead(
   const plain = serialize(result);
   await cacheSet(cacheKey, JSON.stringify(plain), ttl);
   return plain;
+}
+
+export async function invalidateRead(functionName: string, args: unknown[] = []): Promise<void> {
+  await cacheDel(`glread:${functionName}:${JSON.stringify(args)}`);
 }
 
 export interface WriteResult {

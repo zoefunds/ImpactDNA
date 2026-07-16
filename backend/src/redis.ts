@@ -82,6 +82,17 @@ export async function cacheSet(key: string, value: string, ttlSeconds?: number):
   }
 }
 
+export async function cacheDel(key: string): Promise<void> {
+  memCache.delete(key);
+  const r = getClient();
+  if (!r) return;
+  try {
+    await r.del(key);
+  } catch {
+    /* degraded mode */
+  }
+}
+
 /** Fixed-window rate limiter: exactly 1-2 Redis commands per hit. */
 const memCounters = new Map<string, { count: number; resetAt: number }>();
 

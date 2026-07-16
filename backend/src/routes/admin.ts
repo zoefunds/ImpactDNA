@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { query } from "../db.js";
-import { contractWrite, contractRead } from "../lib/genlayer.js";
+import { contractWrite, contractRead, invalidateRead } from "../lib/genlayer.js";
 import { revealPrivateKey } from "../lib/wallet.js";
 import { treasuryAddress, treasuryBalanceAtto, sendGenPayout } from "../lib/treasury.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
@@ -29,7 +29,9 @@ adminRouter.post(
   wrap(async (req, res) => {
     const { poolAtto, label } = req.body as { poolAtto: string; label: string };
     const key = await adminKey(req.user!.id);
-    res.json({ ok: true, tx: await contractWrite(key, "open_epoch", [BigInt(poolAtto), label]) });
+    const tx = await contractWrite(key, "open_epoch", [BigInt(poolAtto), label]);
+    await invalidateRead("get_platform_info");
+    res.json({ ok: true, tx });
   }),
 );
 
@@ -38,7 +40,9 @@ adminRouter.post(
   rateLimit("admin-epoch", 10, 3600),
   wrap(async (req, res) => {
     const key = await adminKey(req.user!.id);
-    res.json({ ok: true, tx: await contractWrite(key, "close_epoch", []) });
+    const tx = await contractWrite(key, "close_epoch", []);
+    await invalidateRead("get_platform_info");
+    res.json({ ok: true, tx });
   }),
 );
 
@@ -48,10 +52,9 @@ adminRouter.post(
   validateBody(z.object({ atto: z.string().regex(/^\d+$/) })),
   wrap(async (req, res) => {
     const key = await adminKey(req.user!.id);
-    res.json({
-      ok: true,
-      tx: await contractWrite(key, "deposit_to_treasury", [BigInt((req.body as { atto: string }).atto)]),
-    });
+    const tx = await contractWrite(key, "deposit_to_treasury", [BigInt((req.body as { atto: string }).atto)]);
+    await invalidateRead("get_platform_info");
+    res.json({ ok: true, tx });
   }),
 );
 
@@ -144,7 +147,9 @@ adminRouter.post(
   wrap(async (req, res) => {
     const { address } = req.body as { address: string };
     const key = await adminKey(req.user!.id);
-    res.json({ ok: true, tx: await contractWrite(key, "add_curator", [address]) });
+    const tx = await contractWrite(key, "add_curator", [address]);
+    await invalidateRead("get_platform_info");
+    res.json({ ok: true, tx });
   }),
 );
 
@@ -154,7 +159,9 @@ adminRouter.delete(
   rateLimit("admin-curators", 10, 3600),
   wrap(async (req, res) => {
     const key = await adminKey(req.user!.id);
-    res.json({ ok: true, tx: await contractWrite(key, "remove_curator", [String(req.params.address)]) });
+    const tx = await contractWrite(key, "remove_curator", [String(req.params.address)]);
+    await invalidateRead("get_platform_info");
+    res.json({ ok: true, tx });
   }),
 );
 
