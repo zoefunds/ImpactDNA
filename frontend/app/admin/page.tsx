@@ -47,7 +47,7 @@ export default function Admin() {
   const refresh = useCallback(async () => {
     await Promise.all([
       api<Treasury>("/api/admin/treasury").then(setTreasury).catch(() => null),
-      api<PlatformInfo>("/api/platform/info", { auth: false }).then(setInfo).catch(() => null),
+      api<{ info: PlatformInfo }>("/api/platform/info", { auth: false }).then((r) => setInfo(r.info)).catch(() => null),
       api<{ items: Payout[] }>("/api/admin/grant-payouts").then((r) => setPayouts(r.items)).catch(() => null),
     ]);
   }, []);
