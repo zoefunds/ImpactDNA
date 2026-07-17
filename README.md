@@ -204,6 +204,18 @@ genlayer write 0x2B4D…8267 detect_manipulation --args c-1
 genlayer write 0x2B4D…8267 set_min_eligible_score --args 40
 ```
 
+## Current stage & path forward
+
+ImpactDNA is live on GenLayer StudioNet with the full lifecycle working end-to-end — including real GEN payouts — but adoption so far is deliberately small: one curator (the founder), one verified developer account, and three test contributions submitted to exercise evaluation, rejection, and funding in practice. That's a testnet dogfooding stage, not a live community yet, and worth being upfront about.
+
+Concrete next steps:
+
+- **Onboard real external developers.** The GitHub OAuth + evaluation pipeline is ready for anyone to connect their own account and submit a real shipped repo — the next milestone is getting the first cohort of unaffiliated maintainers through it.
+- **Recruit additional curators.** Right now one wallet holds owner + curator power. The contract and admin panel already support adding independent curators (`add_curator`); spreading that role out is a trust improvement, not just a feature.
+- **Mainnet deployment.** StudioNet is gasless and free to experiment on; moving to a live GenLayer network is the natural next step once a funding round has run with real external contributions.
+- **Recurring funding rounds.** The quadratic-settlement math has been reasoned through and unit-verified but only exercised live with a single eligible contribution per epoch so far — a real round with multiple competing developers is the next proof point.
+- **Community treasury funding.** Today the treasury is funded manually by the curator; a natural evolution is accepting deposits from anyone who wants to back a round, not just the platform operator.
+
 ## Documentation
 
 - [Architecture](docs/ARCHITECTURE.md) — system design, data flow, consensus model
