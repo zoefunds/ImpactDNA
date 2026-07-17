@@ -2,7 +2,7 @@
 
 ## 1. Intelligent Contract (GenLayer Studio — already deployed)
 
-Deployed to StudioNet at `0x8284169B3c5E5c03A893Ea6b087661b2Ebd1e24f`.
+Deployed to StudioNet at `0x2B4DE4E66Bbfbe173b6E511583d5A66f7BF58267`.
 
 To redeploy (e.g. after changes):
 1. Open https://studio.genlayer.com, create/select an account.
@@ -35,7 +35,7 @@ fly secrets set \
   REDIS_URL="rediss://…upstash…" \
   BREVO_API_KEY="xkeysib-…" \
   BREVO_SENDER_EMAIL="preciousmofeoluwa@gmail.com" \
-  GENLAYER_CONTRACT_ADDRESS="0x8284169B3c5E5c03A893Ea6b087661b2Ebd1e24f" \
+  GENLAYER_CONTRACT_ADDRESS="0x2B4DE4E66Bbfbe173b6E511583d5A66f7BF58267" \
   GITHUB_CLIENT_ID="…" \
   GITHUB_CLIENT_SECRET="…" \
   GITHUB_OAUTH_CALLBACK_URL="https://impactdna-api.fly.dev/api/auth/github/callback" \
@@ -80,7 +80,7 @@ provably moved between two test wallets via `sendTransaction`).
 To fund a real epoch:
 1. `GET /api/admin/treasury` (curator) — returns the treasury address and balance.
 2. Send real GEN to that address from wherever your GEN lives (Studio account, exchange, etc).
-3. Call `POST /api/admin/treasury/deposit` with `{ "atto": "..." }` to record the matching ledger entry on-chain (`deposit_to_treasury`) — this is bookkeeping only, it does not move funds itself.
+3. From the `/admin` panel, record the matching ledger entry with a plain GEN amount (converted to atto client-side) — or call `POST /api/admin/treasury/deposit` with `{ "atto": "<atto-amount>" }` directly. This is bookkeeping only (`deposit_to_treasury`); it does not move funds itself.
 4. Proceed with `open_epoch` / `close_epoch` as before.
 5. When a developer claims a grant, the payout is sent automatically. If the send fails (e.g. treasury underfunded), retry with `POST /api/admin/grant-payouts/:grantId/retry` once funded. `GET /api/admin/grant-payouts` lists payout status/history.
 

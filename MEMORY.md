@@ -4,10 +4,11 @@ A running log of decisions, state, and operational facts. Update as the project 
 
 ## Deployed state
 
-- **Intelligent Contract**: `0x8284169B3c5E5c03A893Ea6b087661b2Ebd1e24f` on **GenLayer StudioNet** (gasless).
-  - Constructor used: `platform_name="Impact_DNA"`, `min_eligible_score=40`.
-  - Contract owner / first curator: `0x7401c129EDfc26E68FE19309fE461eb3Db1058Eb` (the Studio deployer account).
-  - Previous deployment (superseded): `0x2403a1bCc526AC1370a5577c5c4712F5Af1F5749` (gate was 0).
+- **Intelligent Contract**: `0x2B4DE4E66Bbfbe173b6E511583d5A66f7BF58267` on **GenLayer StudioNet** (gasless).
+  - Constructor used: `platform_name="Impact_DNA"`, `min_eligible_score=40` (owner-adjustable on-chain via `set_min_eligible_score`, exposed in the `/admin` panel).
+  - Contract owner: `0x07E130Bd4bB1dCbB97558FCcDC47F14a58d05Fa7` (ownership transferred here from the original Studio deployer account so the app's own admin wallet can act as owner/curator without touching Studio again).
+  - Previous deployments (superseded): `0x8284169B3c5E5c03A893Ea6b087661b2Ebd1e24f`, `0x2403a1bCc526AC1370a5577c5c4712F5Af1F5749`.
+  - Treasury wallet (real GEN custody): `0xb062F2d0B911EDaAD359e00D7940bd5e954973aE`.
 - **Backend**: Fly.io app `impactdna-api` (region iad), 24/7 — `auto_stop_machines="off"`, `min_machines_running=1`, restart policy always.
 - **Frontend**: Vercel (Next.js 14).
 - **GitHub**: https://github.com/zoefunds/ImpactDNA (no AI attribution in commits — project policy).
@@ -54,7 +55,9 @@ A running log of decisions, state, and operational facts. Update as the project 
 ## Operational notes
 
 - StudioNet rate limits: 60 req/min, 1000/hr, 10000/day per IP; ≤32 pending txs per sender.
-- Backend caches contract reads (default TTL 180s) — dashboards may lag the chain by ~3 min.
+- Backend caches contract reads (default TTL 180s) — dashboards may lag the chain by ~3 min. Curator/treasury writes (`open_epoch`, `close_epoch`, `deposit_to_treasury`, add/remove curator) explicitly invalidate the cached `get_platform_info` read so the admin panel doesn't show stale state right after an action.
+- StudioNet does not enforce balance limits on native `sendTransaction` — confirmed by sending 10B GEN from an empty treasury successfully. Real payout failures come from RPC/network conditions, not insufficient funds; `POST /api/admin/treasury/test-send` (admin-only) exists to probe this without touching real grants.
+- `/admin` panel (curator/admin role) now covers day-to-day ops that used to require Studio/CLI: treasury deposit (GEN-denominated input, converted to atto client-side), open/close epoch, eligibility gate adjustment (admin only), curator add/remove (admin only, owner-gated on-chain), grant payout retry.
 - Local smoke test: `docker compose up -d`, backend `.env` from example, then
   register → login → wallet export → `/api/platform/info` (reads the live contract).
 
