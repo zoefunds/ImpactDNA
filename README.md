@@ -124,6 +124,17 @@ A dedicated `/admin` panel (curator/admin role required) replaces manual Studio/
 - **Curator management** (admin only) — add/remove curators on-chain; owner-gated by the contract itself
 - **Grant payouts** — live list of every claim's real-GEN transfer status, with a one-click retry for failed sends
 
+### Why epoch-opening and curator access aren't open to everyone
+
+`open_epoch`, `deposit_to_treasury`, and curator management are deliberately gated to the `curator`/`admin` roles, enforced both in the backend RBAC middleware and independently by the contract itself (`_require_curator`, `_require_owner`). This isn't an oversight to relax later — it's the control that keeps the treasury and funding rounds honest:
+
+- **`open_epoch` controls real money.** A pool size is backed by real GEN sitting in the treasury wallet. If any registered user could open epochs, nothing would stop someone from opening a round timed to their own pending submission, or spamming epochs to lock out a legitimate one.
+- **`deposit_to_treasury` is a ledger claim, not just data entry.** It records that real GEN was sent to the treasury address. Letting anyone call it would let anyone lie about a deposit that never happened, corrupting the on-chain ledger the whole funding model depends on.
+- **Curator management is owner-gated for the same reason ownership matters anywhere:** it's the one power that can't be sandboxed. Adding a curator is adding someone who can move real funds; the contract enforces this at the code level (`add_curator`/`remove_curator` both call `_require_owner()`), so even a compromised backend account can't grant itself curator status without the actual owner key.
+- **This is a permissions problem, not a UX problem.** Anyone can register, verify their GitHub identity, submit contributions, and claim grants they're eligible for — that's the entire user-facing surface, and it's fully open. Curator power is scoped narrowly on purpose, the same way a bank doesn't let every account holder approve wire transfers just because the UI would be simpler that way.
+
+In short: opening this up would trade a small amount of curator friction for a large, unrecoverable trust hole. The mitigation isn't removing the gate — it's making the gate cheap to operate (which is what the `/admin` panel is for) and adding more independent curators over time, rather than concentrating or eliminating the role.
+
 ## Repository layout
 
 ```
