@@ -25,6 +25,10 @@ interface Mine {
   }>;
 }
 
+interface PlatformInfo {
+  current_epoch: string;
+}
+
 interface Grants {
   items: Array<{
     id: string;
@@ -55,6 +59,7 @@ function DashboardInner() {
   const [user, setUser] = useState<User | null>(null);
   const [mine, setMine] = useState<Mine | null>(null);
   const [grants, setGrants] = useState<Grants | null>(null);
+  const [platformInfo, setPlatformInfo] = useState<PlatformInfo | null>(null);
   const [onchainDev, setOnchainDev] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -70,6 +75,9 @@ function DashboardInner() {
     if (!u) return;
     api<Mine>("/api/contributions/mine").then(setMine).catch(() => null);
     api<Grants>("/api/contributions/grants/mine").then(setGrants).catch(() => null);
+    api<{ info: PlatformInfo }>("/api/platform/info", { auth: false })
+      .then((r) => setPlatformInfo(r.info))
+      .catch(() => null);
     if (u.githubUsername) {
       api<Record<string, unknown>>(`/api/platform/developers/${u.githubUsername}`, { auth: false })
         .then(setOnchainDev)
@@ -118,6 +126,7 @@ function DashboardInner() {
   if (!user) return <Spinner />;
 
   const verified = Boolean(onchainDev?.verified);
+  const epochOpen = Boolean(platformInfo?.current_epoch);
 
   return (
     <main className="max-w-container mx-auto w-full px-4 md:px-12 py-10 space-y-6">
@@ -202,7 +211,7 @@ function DashboardInner() {
           </GlassCard>
 
           {/* Step 2: submit contribution */}
-          <GlassCard className="p-8">
+          <GlassCard className={`p-8 ${!epochOpen ? "opacity-50" : ""}`}>
             <h2 className="text-xl font-semibold mb-1 flex items-center gap-3">
               <span className="text-cyan-dim">02</span> Submit a contribution
             </h2>
@@ -210,27 +219,40 @@ function DashboardInner() {
               Submit an open-source repository you shipped. Evaluation judges its real downstream
               impact months after release — thin demos and forks score near zero.
             </p>
-            <div className="grid md:grid-cols-2 gap-4 mb-4">
-              <input className="input-field" placeholder="owner/repository"
-                value={submitForm.repo}
-                onChange={(e) => setSubmitForm({ ...submitForm, repo: e.target.value })} />
-              <select className="input-field" value={submitForm.category}
-                onChange={(e) => setSubmitForm({ ...submitForm, category: e.target.value })}>
-                {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </div>
-            <textarea className="input-field min-h-[100px] mb-4"
-              placeholder="What does it do, and what depends on it? (min 20 chars — validators treat this skeptically and check real evidence)"
-              value={submitForm.description}
-              onChange={(e) => setSubmitForm({ ...submitForm, description: e.target.value })} />
-            <button className="btn-primary" disabled={busy !== "" || !verified}
-              onClick={() =>
-                run("submit", () =>
-                  api("/api/contributions", { method: "POST", body: submitForm }),
-                  "Contribution submitted on-chain.")
-              }>
-              {busy === "submit" ? "Submitting to GenLayer…" : verified ? "Submit for evaluation" : "Verify identity first"}
-            </button>
+            {!epochOpen && (
+              <p className="text-sm text-primary mb-4 font-mono">
+                No funding epoch is open right now — submissions are enabled once a curator opens one.
+              </p>
+            )}
+            <fieldset disabled={!epochOpen} className="contents">
+              <div className="grid md:grid-cols-2 gap-4 mb-4">
+                <input className="input-field" placeholder="owner/repository"
+                  value={submitForm.repo}
+                  onChange={(e) => setSubmitForm({ ...submitForm, repo: e.target.value })} />
+                <select className="input-field" value={submitForm.category}
+                  onChange={(e) => setSubmitForm({ ...submitForm, category: e.target.value })}>
+                  {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+              <textarea className="input-field min-h-[100px] mb-4"
+                placeholder="What does it do, and what depends on it? (min 20 chars — validators treat this skeptically and check real evidence)"
+                value={submitForm.description}
+                onChange={(e) => setSubmitForm({ ...submitForm, description: e.target.value })} />
+              <button className="btn-primary" disabled={busy !== "" || !verified || !epochOpen}
+                onClick={() =>
+                  run("submit", () =>
+                    api("/api/contributions", { method: "POST", body: submitForm }),
+                    "Contribution submitted on-chain.")
+                }>
+                {busy === "submit"
+                  ? "Submitting to GenLayer…"
+                  : !epochOpen
+                    ? "No epoch open"
+                    : verified
+                      ? "Submit for evaluation"
+                      : "Verify identity first"}
+              </button>
+            </fieldset>
           </GlassCard>
 
           {/* My contributions */}
