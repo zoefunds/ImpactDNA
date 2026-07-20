@@ -3,7 +3,6 @@ import { z } from "zod";
 import { query } from "../db.js";
 import { contractWrite, contractRead, invalidateRead } from "../lib/genlayer.js";
 import { revealPrivateKey } from "../lib/wallet.js";
-import { treasuryAddress, treasuryBalanceAtto, sendGenPayout } from "../lib/treasury.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
 import { rateLimit } from "../middleware/rateLimit.js";
 import { wrap, validateBody, HttpError } from "../middleware/errors.js";
@@ -46,75 +45,19 @@ adminRouter.post(
   }),
 );
 
+// -------------------------------------------------------- treasury (real GEN, held in-contract)
 adminRouter.post(
   "/treasury/deposit",
   rateLimit("admin-treasury", 10, 3600),
   validateBody(z.object({ atto: z.string().regex(/^\d+$/) })),
   wrap(async (req, res) => {
     const key = await adminKey(req.user!.id);
-    const tx = await contractWrite(key, "deposit_to_treasury", [BigInt((req.body as { atto: string }).atto)]);
+    const atto = BigInt((req.body as { atto: string }).atto);
+    // deposit_to_treasury is payable — the deposit amount is the real GEN
+    // value attached to this call (gl.message.value), not a calldata arg.
+    const tx = await contractWrite(key, "deposit_to_treasury", [], atto);
     await invalidateRead("get_platform_info");
     res.json({ ok: true, tx });
-  }),
-);
-
-// -------------------------------------------------------- treasury (real GEN)
-adminRouter.get(
-  "/treasury",
-  wrap(async (_req, res) => {
-    res.json({ address: await treasuryAddress(), balanceAtto: await treasuryBalanceAtto() });
-  }),
-);
-
-adminRouter.post(
-  "/treasury/test-send",
-  requireRole("admin"),
-  rateLimit("admin-treasury-test", 5, 3600),
-  validateBody(z.object({ toAddress: z.string().min(10).max(64), amountAtto: z.string().regex(/^\d+$/) })),
-  wrap(async (req, res) => {
-    const { toAddress, amountAtto } = req.body as { toAddress: string; amountAtto: string };
-    try {
-      const txHash = await sendGenPayout(toAddress, BigInt(amountAtto));
-      res.json({ ok: true, txHash });
-    } catch (err) {
-      res.json({ ok: false, error: err instanceof Error ? err.message : String(err) });
-    }
-  }),
-);
-
-adminRouter.post(
-  "/grant-payouts/:grantId/retry",
-  rateLimit("admin-payout-retry", 20, 3600),
-  wrap(async (req, res) => {
-    const grantId = String(req.params.grantId);
-    const existing = await query("SELECT status FROM grant_payouts WHERE grant_id = $1", [grantId]);
-    if (existing.rowCount && existing.rows[0].status === "sent") {
-      throw new HttpError(409, "Payout already sent for this grant");
-    }
-    const grant = (await contractRead("get_grant", [grantId], { skipCache: true })) as {
-      claimed: boolean;
-      wallet: string;
-      amount_atto: string;
-    };
-    if (!grant.claimed) throw new HttpError(400, "Grant has not been claimed on-chain yet");
-    const txHash = await sendGenPayout(grant.wallet, BigInt(grant.amount_atto));
-    await query(
-      `INSERT INTO grant_payouts (grant_id, wallet, amount_atto, tx_hash, status)
-       VALUES ($1,$2,$3,$4,'sent')
-       ON CONFLICT (grant_id) DO UPDATE SET tx_hash = $4, status = 'sent', error = NULL, updated_at = now()`,
-      [grantId, grant.wallet, grant.amount_atto, txHash],
-    );
-    res.json({ ok: true, txHash });
-  }),
-);
-
-adminRouter.get(
-  "/grant-payouts",
-  wrap(async (_req, res) => {
-    const rows = await query(
-      "SELECT * FROM grant_payouts ORDER BY created_at DESC LIMIT 200",
-    );
-    res.json({ items: rows.rows });
   }),
 );
 

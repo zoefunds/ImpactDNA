@@ -7,7 +7,6 @@ import { requireAuth } from "../middleware/auth.js";
 import { rateLimit } from "../middleware/rateLimit.js";
 import { wrap, validateBody, HttpError } from "../middleware/errors.js";
 import { sendEmail, notifyEmail } from "../lib/email.js";
-import { sendGenPayout } from "../lib/treasury.js";
 import { logger } from "../lib/logger.js";
 
 /**
@@ -187,50 +186,21 @@ contributionsRouter.post(
   wrap(async (req, res) => {
     const grantId = String(req.params.grantId);
     const { key, email } = await userWalletKey(req.user!.id);
-    const result = await contractWrite(key, "claim_grant", [grantId]);
 
-    // On-chain claim is now the authoritative, tamper-evident record.
-    // The matching real GEN payout is a plain native-value transfer from
-    // the treasury wallet (contracts can't send value back out — see
-    // lib/treasury.ts). Recorded in grant_payouts for auditability and
-    // so a failed send can be retried without re-claiming on-chain.
-    let payout: { status: string; txHash: string | null; error?: string } = {
-      status: "pending",
-      txHash: null,
-    };
-    const grant = (await contractRead("get_grant", [grantId], { skipCache: true })) as {
-      wallet: string;
-      amount_atto: string;
-    };
-    try {
-      const txHash = await sendGenPayout(grant.wallet, BigInt(grant.amount_atto));
-      await query(
-        `INSERT INTO grant_payouts (grant_id, wallet, amount_atto, tx_hash, status)
-         VALUES ($1,$2,$3,$4,'sent')
-         ON CONFLICT (grant_id) DO UPDATE SET tx_hash = $4, status = 'sent', updated_at = now()`,
-        [grantId, grant.wallet, grant.amount_atto, txHash],
-      );
-      payout = { status: "sent", txHash };
-    } catch (err) {
-      logger.error({ err, grantId }, "treasury payout failed after on-chain claim");
-      await query(
-        `INSERT INTO grant_payouts (grant_id, wallet, amount_atto, status, error)
-         VALUES ($1, $2, $3, 'failed', $4)
-         ON CONFLICT (grant_id) DO UPDATE SET status = 'failed', error = $4, updated_at = now()`,
-        [grantId, grant.wallet, grant.amount_atto, err instanceof Error ? err.message : String(err)],
-      );
-      payout = { status: "failed", txHash: null, error: "Payout delayed — will be retried" };
-    }
+    // claim_grant now pays out real GEN atomically, in the same call:
+    // the contract holds the funds directly and sends them via
+    // _send_gen once the claim is recorded (checks-effects-interactions
+    // — see contracts/impact_dna.py). If the transfer fails, the whole
+    // call reverts and nothing is marked claimed, so there's no
+    // partial/inconsistent state to reconcile or retry here.
+    const result = await contractWrite(key, "claim_grant", [grantId]);
 
     const mail = notifyEmail(
       "Grant claimed",
-      `Your retroactive funding grant <b>${grantId}</b> has been claimed on-chain.` +
-        (payout.status === "sent"
-          ? " Your GEN payout has been sent to your wallet."
-          : " Your payout is being processed and will arrive shortly."),
+      `Your retroactive funding grant <b>${grantId}</b> has been claimed on-chain and the GEN payout has been sent to your wallet.`,
     );
     void sendEmail({ to: email, ...mail, kind: "grant_claimed", userId: req.user!.id });
-    res.json({ ok: true, tx: result, payout });
+    res.json({ ok: true, tx: result });
   }),
 );
 
@@ -307,18 +277,10 @@ contributionsRouter.get(
       if (offset >= batch.total) break;
     }
 
-    const payoutRows = await query(
-      "SELECT grant_id, status, tx_hash FROM grant_payouts WHERE grant_id = ANY($1)",
-      [mine.map((g) => String(g.id))],
-    );
-    const payoutByGrant = new Map(payoutRows.rows.map((r) => [String(r.grant_id), r]));
-
-    res.json({
-      items: mine.map((g) => ({
-        ...g,
-        payout: payoutByGrant.get(String(g.id)) ?? null,
-      })),
-    });
+    // claim_grant now pays out real GEN atomically on-chain, so the
+    // grant's own `claimed` field is the authoritative payout status —
+    // no separate off-chain payout ledger to join against.
+    res.json({ items: mine });
   }),
 );
 

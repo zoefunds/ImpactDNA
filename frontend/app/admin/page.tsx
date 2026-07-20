@@ -3,15 +3,10 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { GlassCard, StatCard, Spinner, ErrorNote } from "@/components/ui";
-import { api, currentUser, formatGen, parseGen, getToken } from "@/lib/api";
+import { api, formatGen, parseGen, getToken } from "@/lib/api";
 
 interface User {
   role: string;
-}
-
-interface Treasury {
-  address: string;
-  balanceAtto: string;
 }
 
 interface PlatformInfo {
@@ -21,21 +16,10 @@ interface PlatformInfo {
   min_eligible_score: number;
 }
 
-interface Payout {
-  grant_id: string;
-  wallet: string;
-  amount_atto: string;
-  status: string;
-  tx_hash: string | null;
-  error: string | null;
-}
-
 export default function Admin() {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
-  const [treasury, setTreasury] = useState<Treasury | null>(null);
   const [info, setInfo] = useState<PlatformInfo | null>(null);
-  const [payouts, setPayouts] = useState<Payout[]>([]);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState("");
@@ -47,11 +31,9 @@ export default function Admin() {
   const [minScore, setMinScore] = useState("");
 
   const refresh = useCallback(async () => {
-    await Promise.all([
-      api<Treasury>("/api/admin/treasury").then(setTreasury).catch(() => null),
-      api<{ info: PlatformInfo }>("/api/platform/info", { auth: false }).then((r) => setInfo(r.info)).catch(() => null),
-      api<{ items: Payout[] }>("/api/admin/grant-payouts").then((r) => setPayouts(r.items)).catch(() => null),
-    ]);
+    await api<{ info: PlatformInfo }>("/api/platform/info", { auth: false })
+      .then((r) => setInfo(r.info))
+      .catch(() => null);
   }, []);
 
   useEffect(() => {
@@ -101,33 +83,31 @@ export default function Admin() {
       )}
 
       <section className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <StatCard label="Treasury (real GEN)" value={`${formatGen(treasury?.balanceAtto)} GEN`} accent="text-green"
-          sub="Backend-held wallet — sends real payouts on claim" />
-        <StatCard label="On-chain ledger" value={`${formatGen(info?.treasury_atto)} GEN`} accent="text-cyan-dim"
-          sub="Recorded via deposit_to_treasury (bookkeeping only)" />
+        <StatCard label="Treasury (real GEN)" value={`${formatGen(info?.treasury_atto)} GEN`} accent="text-green"
+          sub="Held directly in the contract — payouts are sent on claim, no intermediary wallet" />
         <StatCard label="Current epoch" value={info?.current_epoch || "none open"} accent="text-primary"
           sub={`${info?.epoch_count ?? 0} epochs run so far`} />
+        <StatCard label="Eligibility gate" value={String(info?.min_eligible_score ?? "—")} accent="text-cyan-dim"
+          sub="Minimum impact score to compete for funding" />
       </section>
 
       <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <GlassCard className="p-8">
-          <h2 className="text-xl font-semibold mb-1">Treasury wallet</h2>
+          <h2 className="text-xl font-semibold mb-1">Treasury deposit</h2>
           <p className="text-on-variant text-sm mb-4">
-            Send real GEN to this address, then record the matching ledger entry on-chain.
-          </p>
-          <p className="font-mono text-xs break-all bg-surface-lowest p-3 rounded-lg text-green mb-4">
-            {treasury?.address ?? "—"}
+            Deposits real GEN directly into the contract in one transaction — no separate wallet
+            to send to first.
           </p>
           <div className="flex flex-col sm:flex-row gap-3">
-            <input className="input-field sm:max-w-xs" placeholder="GEN amount deposited (e.g. 100)"
+            <input className="input-field sm:max-w-xs" placeholder="GEN amount to deposit (e.g. 100)"
               value={depositGen} onChange={(e) => setDepositGen(e.target.value)} />
             <button className="btn-primary" disabled={busy !== "" || !depositGen}
               onClick={() =>
                 run("deposit", () =>
                   api("/api/admin/treasury/deposit", { method: "POST", body: { atto: parseGen(depositGen) } }),
-                  "Deposit recorded on-chain.")
+                  "Deposit sent to the contract.")
               }>
-              {busy === "deposit" ? "Recording…" : "Record deposit"}
+              {busy === "deposit" ? "Depositing…" : "Deposit"}
             </button>
           </div>
         </GlassCard>
@@ -218,41 +198,6 @@ export default function Admin() {
           </div>
         </GlassCard>
       )}
-
-      <GlassCard className="p-8">
-        <h2 className="text-xl font-semibold mb-6">Grant payouts</h2>
-        {!payouts.length ? (
-          <p className="text-on-variant text-sm font-mono">No payouts recorded yet.</p>
-        ) : (
-          <div className="space-y-4">
-            {payouts.map((p) => (
-              <div key={p.grant_id}
-                className="p-4 bg-surface-low border border-outline-variant/30 rounded-lg flex flex-col md:flex-row md:items-center justify-between gap-3">
-                <div>
-                  <p className="font-mono text-on-surface">{p.grant_id} <span className="text-on-variant text-xs">→ {p.wallet || "—"}</span></p>
-                  <p className="font-mono text-sm text-green mt-1">{formatGen(p.amount_atto)} GEN</p>
-                  {p.error && <p className="text-xs text-danger mt-1">{p.error}</p>}
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className={`chip ${p.status === "sent" ? "bg-green/10 text-green border-green/20" : "bg-danger/10 text-danger border-danger/20"}`}>
-                    {p.status}
-                  </span>
-                  {p.status === "failed" && (
-                    <button className="btn-ghost !py-1.5 !px-4 text-xs" disabled={busy !== ""}
-                      onClick={() =>
-                        run(`retry-${p.grant_id}`, () =>
-                          api(`/api/admin/grant-payouts/${p.grant_id}/retry`, { method: "POST" }),
-                          "Payout retried.")
-                      }>
-                      {busy === `retry-${p.grant_id}` ? "Retrying…" : "Retry"}
-                    </button>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </GlassCard>
     </main>
   );
 }

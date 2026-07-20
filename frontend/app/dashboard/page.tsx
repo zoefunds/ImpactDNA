@@ -36,7 +36,6 @@ interface Grants {
     contribution: string;
     amount_atto: string;
     claimed: boolean;
-    payout: { status: string; tx_hash: string | null } | null;
   }>;
 }
 
@@ -311,15 +310,13 @@ function DashboardInner() {
                     </div>
                     <div className="flex items-center gap-3">
                       {g.claimed ? (
-                        <span className="font-mono text-xs text-green">
-                          ✓ claimed{g.payout?.status === "sent" ? " — GEN sent to your wallet" : g.payout?.status === "failed" ? " — payout retry pending" : ""}
-                        </span>
+                        <span className="font-mono text-xs text-green">✓ claimed — GEN sent to your wallet</span>
                       ) : (
                         <button className="btn-primary !py-1.5 !px-4 text-xs" disabled={busy !== ""}
                           onClick={() =>
                             run(`claim-${g.id}`, () =>
                               api(`/api/contributions/grants/${g.id}/claim`, { method: "POST" }),
-                              "Grant claimed — your GEN payout is on its way.")
+                              "Grant claimed — GEN sent to your wallet.")
                           }>
                           {busy === `claim-${g.id}` ? "Claiming…" : "Claim"}
                         </button>

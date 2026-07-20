@@ -2,7 +2,7 @@
 
 ## 1. Intelligent Contract (GenLayer Studio — already deployed)
 
-Deployed to StudioNet at `0x2B4DE4E66Bbfbe173b6E511583d5A66f7BF58267`.
+Deployed to StudioNet at `0x0B20d8C224FE2BE01469C70663C0eEcbBD155978`.
 
 To redeploy (e.g. after changes):
 1. Open https://studio.genlayer.com, create/select an account.
@@ -11,11 +11,15 @@ To redeploy (e.g. after changes):
 4. Deploy on **StudioNet** (gasless — 0 GEN balance is fine).
 5. Put the new address in backend secrets (`GENLAYER_CONTRACT_ADDRESS`).
 
-Post-deploy (owner account, in Studio or CLI):
+Post-deploy (owner account):
 ```bash
 genlayer network set studionet
 genlayer write <ADDR> set_min_eligible_score --args 40
-genlayer write <ADDR> deposit_to_treasury --args 1000000000000000000000   # 1000 GEN (atto)
+```
+`deposit_to_treasury` is `payable` — deposit real GEN from Studio's UI (it has a
+transaction-value field); the CLI's `write` command doesn't expose a `--value`
+flag. Then:
+```bash
 genlayer write <ADDR> open_epoch --args 500000000000000000000 "Genesis Round"
 ```
 
@@ -35,7 +39,7 @@ fly secrets set \
   REDIS_URL="rediss://…upstash…" \
   BREVO_API_KEY="xkeysib-…" \
   BREVO_SENDER_EMAIL="preciousmofeoluwa@gmail.com" \
-  GENLAYER_CONTRACT_ADDRESS="0x2B4DE4E66Bbfbe173b6E511583d5A66f7BF58267" \
+  GENLAYER_CONTRACT_ADDRESS="0x0B20d8C224FE2BE01469C70663C0eEcbBD155978" \
   GITHUB_CLIENT_ID="…" \
   GITHUB_CLIENT_SECRET="…" \
   GITHUB_OAUTH_CALLBACK_URL="https://impactdna-api.fly.dev/api/auth/github/callback" \
@@ -61,28 +65,24 @@ Put the Client ID/Secret in the `fly secrets set` command above. This
 replaces free-text GitHub username entry — a user can only link an
 account they can actually authenticate as via GitHub's own login.
 
-### Treasury payouts (real GEN)
+### Treasury payouts (real GEN, escrowed in-contract)
 
-GenVM intelligent contracts can receive native value (`@gl.public.write.payable`
-+ `gl.message.value`) but expose **no primitive to send it back out** —
-confirmed by introspecting the runtime (`gl.evm` has no transfer/send
-function; `gl.message` is read-only). Holding real GEN inside the
-contract would trap it permanently.
-
-Instead, the backend generates and encrypts a **treasury wallet** (a
-plain EOA, stored in the `treasury_wallet` table, lazily created on
-first use). The contract stays the authoritative ledger — grants,
-claims, eligibility — while the treasury wallet executes real payouts
-as plain native-value transfers once a developer's `claim_grant` call
-finalizes on-chain (verified working end-to-end on StudioNet: balance
-provably moved between two test wallets via `sendTransaction`).
+The contract holds and pays out real GEN directly — no off-chain treasury
+wallet. `deposit_to_treasury` is `@gl.public.write.payable`: the deposited
+amount is `gl.message.value`, credited straight into the contract's own
+balance. `claim_grant` sends the payout in the same call, via a single
+`_send_gen` choke point that uses an EVM-interface stub
+(`_Recipient(...).emit_transfer(value=...)`) — the mechanism GenVM actually
+uses to deliver native value to a plain wallet, confirmed live against this
+exact pinned runner. State (grant marked claimed, treasury ledger debited) is
+committed *before* the transfer, so a repeated or re-entrant claim call finds
+the balance already reduced — no double-spend, no separate retry path needed,
+because a failed transfer reverts the whole call and leaves nothing claimed.
 
 To fund a real epoch:
-1. `GET /api/admin/treasury` (curator) — returns the treasury address and balance.
-2. Send real GEN to that address from wherever your GEN lives (Studio account, exchange, etc).
-3. From the `/admin` panel, record the matching ledger entry with a plain GEN amount (converted to atto client-side) — or call `POST /api/admin/treasury/deposit` with `{ "atto": "<atto-amount>" }` directly. This is bookkeeping only (`deposit_to_treasury`); it does not move funds itself.
-4. Proceed with `open_epoch` / `close_epoch` as before.
-5. When a developer claims a grant, the payout is sent automatically. If the send fails (e.g. treasury underfunded), retry with `POST /api/admin/grant-payouts/:grantId/retry` once funded. `GET /api/admin/grant-payouts` lists payout status/history.
+1. Deposit real GEN via the `/admin` panel (or `POST /api/admin/treasury/deposit` with `{ "atto": "<atto-amount>" }`) — this attaches the GEN as the call's value and credits the contract directly.
+2. Proceed with `open_epoch` / `close_epoch` as before.
+3. When a developer claims a grant, the payout is sent in the same on-chain transaction — nothing to retry or reconcile off-chain.
 
 ## 3. Frontend → Vercel
 

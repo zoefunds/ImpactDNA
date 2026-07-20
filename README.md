@@ -2,7 +2,7 @@
 
 **Retroactive Public Goods Funding on GenLayer.**
 
-ImpactDNA flips the traditional grants model: instead of funding proposals before work begins, it evaluates open-source repositories *after* release and rewards the ones that became genuinely foundational. The subjective judgment — is this work original, adopted, influential? — is performed entirely by a **GenLayer Intelligent Contract**: validators independently fetch live GitHub evidence and score impact with LLM reasoning, reaching consensus before anything is recorded or funded. Grants are then paid out in **real GEN**, sent by a backend-held treasury wallet once a developer claims them on-chain.
+ImpactDNA flips the traditional grants model: instead of funding proposals before work begins, it evaluates open-source repositories *after* release and rewards the ones that became genuinely foundational. The subjective judgment — is this work original, adopted, influential? — is performed entirely by a **GenLayer Intelligent Contract**: validators independently fetch live GitHub evidence and score impact with LLM reasoning, reaching consensus before anything is recorded or funded. Grants are then paid out in **real GEN, escrowed and sent directly by the contract itself** the moment a developer claims them on-chain.
 
 ![Landing page](docs/screenshots/landing.png)
 
@@ -12,26 +12,12 @@ ImpactDNA flips the traditional grants model: instead of funding proposals befor
 |---|---|
 | **Web app** | [impactdna.vercel.app](https://impactdna.vercel.app) |
 | **REST API** (24/7, health-checked) | [impactdna-api.fly.dev](https://impactdna-api.fly.dev) |
-| **Intelligent Contract** | [`0x2B4DE4E66Bbfbe173b6E511583d5A66f7BF58267`](https://studio.genlayer.com) — GenLayer StudioNet (gasless) |
+| **Intelligent Contract** | [`0x0B20d8C224FE2BE01469C70663C0eEcbBD155978`](https://studio.genlayer.com) — GenLayer StudioNet (gasless) |
 | **Contract owner / curator** | `0x07E130Bd4bB1dCbB97558FCcDC47F14a58d05Fa7` |
-| **Treasury wallet** (real GEN custody) | `0xb062F2d0B911EDaAD359e00D7940bd5e954973aE` — backend-held, AES-256-GCM encrypted key |
 
 Constructor: `platform_name="Impact_DNA"`, `min_eligible_score=40` (owner-adjustable from the admin panel).
 
-### End-to-end verification (real on-chain transactions, this deployment)
-
-Every step of the lifecycle has been exercised against the live contract with 5-validator consensus, including a real GEN payout:
-
-| Step | Result |
-|---|---|
-| GitHub OAuth connect + `register_developer` + `verify_developer` | `@zoefunds` verified by validator consensus |
-| `submit_contribution("zoefunds/care-bridge")` → `evaluate_contribution` | **15/100 — rejected** (zero stars/forks, no license) |
-| `submit_contribution("zoefunds/trap-net")` → `evaluate_contribution` | **4/100** — eligible once curator lowered the score gate for testing |
-| `open_epoch` (Season 1, 50 GEN pool) → `close_epoch` | quadratic settlement → grant `g-1` |
-| `claim_grant("g-1")` | on-chain claim + **real 50 GEN transfer** from treasury wallet, confirmed by tx receipt |
-| `detect_manipulation`, `request_appeal` / `resolve_appeal` | both exercised live; appeal correctly denied without contradicting evidence |
-
-The rejections demonstrate the system working as designed — thin, unadopted repositories score low against a real eligibility gate rather than being rubber-stamped.
+This is a freshly redeployed contract that moves real GEN custody in-contract (see [Real GEN escrow](#real-gen-escrow-held-directly-in-the-contract) below) — the escrow/payout path itself is proven working via an isolated probe on this exact pinned runner, but the full lifecycle hasn't yet been re-run end-to-end against *this specific deployment*. The previous deployment's full lifecycle — register → verify → submit → evaluate → open epoch → close epoch → claim → real GEN transfer, plus `detect_manipulation` and `request_appeal`/`resolve_appeal` — was exercised live with 5-validator consensus throughout, including a real 50 GEN payout on claim.
 
 ## How it works
 
@@ -52,14 +38,14 @@ in the same or adjacent 25-point bucket.
 Score >= gate --> eligible for funding   |   Score < gate --> rejected (appeal available once)
          |
          v
-Curator deposits real GEN to the treasury wallet + opens an epoch with a pool
+Curator deposits real GEN directly into the contract + opens an epoch with a pool
          |
          v
 Curator closes epoch --> pool split deterministically by quadratic weight (score^2)
          |
          v
-Developer claims grant on-chain --> backend sends real GEN from the treasury
-wallet to the developer's wallet (retryable if the transfer fails)
+Developer claims grant on-chain --> contract sends real GEN to the developer's
+wallet in the same transaction (see Real GEN escrow below)
 ```
 
 ### Impact dimensions (0-20 each, 100 total)
@@ -95,14 +81,13 @@ Every judgment that matters happens inside the contract under multi-validator co
 
 An off-chain AI could score repositories, but there would be no way to verify that the scoring was honest, consistent, or tamper-proof. GenLayer makes every evaluation auditable and adversarially robust.
 
-## Real GEN payouts (not just ledger accounting)
+## Real GEN escrow, held directly in the contract
 
-GenVM Intelligent Contracts can *receive* native value (`@gl.public.write.payable`) but expose no primitive to send it back out — confirmed by introspecting the runtime (`gl.evm` has no `emit_transfer`; `gl.message` is read-only). So the contract stays the authoritative ledger (grants, claims, eligibility), while a **backend-held treasury wallet** — a plain EOA, private key AES-256-GCM encrypted at rest — executes real native-value transfers via `sendTransaction` once a grant is claimed on-chain:
+Real GEN custody and payouts live entirely on-chain — no off-chain treasury wallet, no backend private key, no intermediary that could go down or be compromised independently of the contract itself:
 
-1. Curator sends real GEN to the treasury address, then records the deposit on-chain (`deposit_to_treasury`) for bookkeeping.
-2. Developer calls `claim_grant` on-chain — this is the authoritative, tamper-evident record of the claim.
-3. The backend sends the matching real GEN transfer from the treasury wallet immediately after.
-4. If the transfer fails (network hiccup, RPC congestion), it's recorded in `grant_payouts` as `failed` with the error, and a curator can retry from the admin panel without re-claiming on-chain.
+- `deposit_to_treasury` is `@gl.public.write.payable` — a curator's deposit is real GEN value attached to the call (`gl.message.value`, never a caller-supplied number), credited straight into the contract's own balance.
+- `claim_grant` pays out directly: it marks the grant claimed and debits the treasury ledger *before* transferring — checks-effects-interactions — so a second claim call (re-entrant or repeated) finds the ledger already reduced and the grant already claimed, making double-spend structurally impossible. The transfer itself routes through a single choke point (`_send_gen`), using an EVM-interface stub (`_Recipient(...).emit_transfer(value=...)`) — the mechanism GenVM actually uses to deliver native value to a plain wallet, confirmed by a live probe on this exact pinned runner.
+- If a payout ever needs recovering (e.g. a mis-set grant amount), it's a contract-level fix, not a matter of retrying a separate off-chain transaction — there's only one source of truth for whether GEN moved.
 
 ## Screenshots
 
@@ -118,18 +103,17 @@ GenVM Intelligent Contracts can *receive* native value (`@gl.public.write.payabl
 
 A dedicated `/admin` panel (curator/admin role required) replaces manual Studio/CLI calls for day-to-day operation:
 
-- **Treasury wallet** — displays the real-GEN custody address; record a GEN-denominated deposit (converted to atto client-side, no more typing 18-zero atto strings)
+- **Treasury deposit** — deposit real GEN directly into the contract in one transaction (GEN-denominated input, converted to atto client-side, no more typing 18-zero atto strings)
 - **Funding epoch** — open a round with a GEN pool size and label, or close the open epoch to settle grants
 - **Eligibility gate** (admin only) — adjust `min_eligible_score` (0–100) as the platform's repo pool matures
 - **Curator management** (admin only) — add/remove curators on-chain; owner-gated by the contract itself
-- **Grant payouts** — live list of every claim's real-GEN transfer status, with a one-click retry for failed sends
 
 ### Why epoch-opening and curator access aren't open to everyone
 
 `open_epoch`, `deposit_to_treasury`, and curator management are deliberately gated to the `curator`/`admin` roles, enforced both in the backend RBAC middleware and independently by the contract itself (`_require_curator`, `_require_owner`). This isn't an oversight to relax later — it's the control that keeps the treasury and funding rounds honest:
 
-- **`open_epoch` controls real money.** A pool size is backed by real GEN sitting in the treasury wallet. If any registered user could open epochs, nothing would stop someone from opening a round timed to their own pending submission, or spamming epochs to lock out a legitimate one.
-- **`deposit_to_treasury` is a ledger claim, not just data entry.** It records that real GEN was sent to the treasury address. Letting anyone call it would let anyone lie about a deposit that never happened, corrupting the on-chain ledger the whole funding model depends on.
+- **`open_epoch` controls real money.** A pool size is backed by real GEN held directly in the contract. If any registered user could open epochs, nothing would stop someone from opening a round timed to their own pending submission, or spamming epochs to lock out a legitimate one.
+- **`deposit_to_treasury` moves real funds into the contract.** It's a `payable` call — the deposited amount comes from the transaction's own value, not a claimed number, so it can't be faked. But it's still curator-gated: letting anyone call it would let anyone dictate when and how much enters the funding pool, which is a funding-round-integrity problem even though the amount itself can't be lied about.
 - **Curator management is owner-gated for the same reason ownership matters anywhere:** it's the one power that can't be sandboxed. Adding a curator is adding someone who can move real funds; the contract enforces this at the code level (`add_curator`/`remove_curator` both call `_require_owner()`), so even a compromised backend account can't grant itself curator status without the actual owner key.
 - **This is a permissions problem, not a UX problem.** Anyone can register, verify their GitHub identity, submit contributions, and claim grants they're eligible for — that's the entire user-facing surface, and it's fully open. Curator power is scoped narrowly on purpose, the same way a bank doesn't let every account holder approve wire transfers just because the UI would be simpler that way.
 
@@ -143,8 +127,8 @@ contracts/impact_dna.py    Intelligent Contract (1,500+ lines, genvm-lint clean,
 backend/                   Node 20 + TypeScript + Express (Fly.io, 24/7)
   src/routes/               Auth (incl. GitHub OAuth), contributions, platform,
                             admin (curator/treasury/eligibility ops)
-  src/lib/                  GenLayer client, treasury (real GEN custody + payouts),
-                            wallet encryption, GitHub OAuth, email, Redis, logger
+  src/lib/                  GenLayer client, wallet encryption, GitHub OAuth,
+                            email, Redis, logger
   src/middleware/           JWT auth, rate limiting, error handling
   migrations/                Forward-only SQL migrations (run at boot)
 frontend/                  Next.js 14 + Tailwind CSS (Vercel)
@@ -164,7 +148,7 @@ docker-compose.yml         Local PostgreSQL (port 5439)
 | Backend | Node.js 20, TypeScript, Express, PostgreSQL, Upstash Redis, Brevo |
 | Frontend | Next.js 14, React 18, Tailwind CSS, TypeScript |
 | Infrastructure | Fly.io (24/7), Vercel, Docker, GitHub Actions CI |
-| Crypto | ethers.js (wallet generation + treasury payouts), AES-256-GCM (key encryption), bcrypt(12) |
+| Crypto | ethers.js (custodial wallet generation), AES-256-GCM (key encryption), bcrypt(12) |
 | Chain interaction | genlayer-js SDK |
 | Identity | GitHub OAuth 2.0 (signed, short-lived state JWT — no typed usernames) |
 | Email | Brevo transactional HTTP API, every send logged to `notification_log` |
@@ -174,7 +158,7 @@ docker-compose.yml         Local PostgreSQL (port 5439)
 - **GitHub OAuth developer identity** — users connect via OAuth (never a typed username), so an account can only be linked by someone who actually controls it; `github_id` is uniquely constrained so one GitHub account can't be linked to multiple ImpactDNA accounts.
 - **Email + password auth** with JWT access tokens (15-min) and rotating refresh tokens (7-day). Brevo-powered password reset with 30-minute one-time tokens.
 - **Permanent custodial wallets**: generated at signup with ethers, AES-256-GCM encrypted at rest. Address never changes, survives device/browser resets. Private-key export requires password re-confirmation. StudioNet is gasless, so users transact without holding tokens.
-- **Real GEN treasury and payouts**: a backend-held EOA wallet executes actual native-value transfers when grants are claimed — see [Real GEN payouts](#real-gen-payouts-not-just-ledger-accounting) above.
+- **Real GEN escrow and payouts**: held directly in the contract, paid out atomically on claim — see [Real GEN escrow](#real-gen-escrow-held-directly-in-the-contract) above.
 - **Transactional email** via Brevo HTTP API: welcome, password reset, submission confirmation, evaluation results, grant claimed — every send (success or failure) logged to `notification_log`.
 - **Conservative Redis usage** (Upstash, billed per command): single lazy connection, in-process micro-cache (Map, max 500 entries) in front of every read, TTL on all keys, fixed-window rate limiter costing 1-2 commands per hit, graceful degradation to in-memory if Redis is unreachable. Curator/treasury writes explicitly invalidate the cached platform-info read so the admin panel never shows stale state after an action.
 - **24/7 backend**: Fly.io with `auto_stop_machines="off"`, `min_machines_running=1`, restart policy `always`, `/health` endpoint checked every 30 seconds, externally monitored via UptimeRobot.
@@ -196,23 +180,25 @@ cd ../frontend && npm install && npm run dev  # web on :3000
 The recommended path is the **`/admin` panel** (see [screenshots](#screenshots) above) — deposit GEN, open/close epochs, and adjust the eligibility gate without leaving the app. The same operations are available directly against the contract for scripted or emergency use:
 
 ```bash
-# Deposit to treasury ledger (amount in atto-GEN; 1 GEN = 1e18 atto)
-genlayer write 0x2B4D…8267 deposit_to_treasury --args 100000000000000000000
+# deposit_to_treasury is payable — the deposit is the real GEN value attached
+# to the call, not a calldata arg. The genlayer CLI's `write` command doesn't
+# expose a --value flag, so deposit from Studio's UI (which has a value field)
+# or the /admin panel; use the CLI for everything else below.
 
 # Open an epoch with a 50 GEN pool
-genlayer write 0x2B4D…8267 open_epoch --args 50000000000000000000 "Season 1"
+genlayer write 0x0B20…5978 open_epoch --args 50000000000000000000 "Season 1"
 
 # Developers submit and evaluate during the epoch...
 
 # Close epoch — deterministic quadratic settlement
-genlayer write 0x2B4D…8267 close_epoch
+genlayer write 0x0B20…5978 close_epoch
 
 # Resolve any open appeals / run a manipulation screen
-genlayer write 0x2B4D…8267 resolve_appeal --args a-1
-genlayer write 0x2B4D…8267 detect_manipulation --args c-1
+genlayer write 0x0B20…5978 resolve_appeal --args a-1
+genlayer write 0x0B20…5978 detect_manipulation --args c-1
 
 # Adjust the eligibility gate (owner only)
-genlayer write 0x2B4D…8267 set_min_eligible_score --args 40
+genlayer write 0x0B20…5978 set_min_eligible_score --args 40
 ```
 
 ## Current stage & path forward

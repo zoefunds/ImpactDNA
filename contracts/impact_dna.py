@@ -8,6 +8,38 @@ import typing
 from genlayer import *
 
 
+@gl.evm.contract_interface
+class _Recipient:
+    """EVM-interface stub used solely to route native GEN payouts through
+    GenLayer's EVM-compatibility layer. This is the mechanism confirmed
+    (by live probe against this exact pinned runner) to actually deliver
+    value to a plain wallet (EOA): `gl.get_contract_at(addr).emit_transfer(...)`
+    (the pattern shown in genvm's own docs/examples) instead fails with
+    "Contract ... not found" against any address without deployed
+    contract code, which is what every user's custodial wallet is.
+    Route ALL payouts through _send_gen below — never call emit_transfer
+    directly elsewhere."""
+
+    class View:
+        pass
+
+    class Write:
+        pass
+
+
+def _send_gen(to_address: str, amount: u256) -> None:
+    """Single choke point for every native GEN payout this contract
+    makes. Callers must zero the ledger field the amount is drawn from
+    and persist state BEFORE calling this — state mutation always
+    precedes the external transfer, so there is no reentrancy window
+    where a payout could be claimed twice."""
+    if not to_address:
+        raise gl.vm.UserError(f"{ERROR_EXPECTED} Missing recipient address")
+    if amount <= u256(0):
+        raise gl.vm.UserError(f"{ERROR_EXPECTED} Transfer amount must be positive")
+    _Recipient(Address(to_address)).emit_transfer(value=amount)
+
+
 # ---------------------------------------------------------------------------
 # Error classification prefixes (see module docstring)
 # ---------------------------------------------------------------------------
@@ -558,23 +590,22 @@ class ImpactDNA(gl.Contract):
         self.config["min_eligible_score"] = str(score)
         self._audit("set_min_eligible_score", self._sender_hex(), {"score": score})
 
-    @gl.public.write
-    def deposit_to_treasury(self, atto_amount: int) -> None:
-        """Record a treasury deposit (ledger accounting, atto units).
+    @gl.public.write.payable
+    def deposit_to_treasury(self) -> None:
+        """Deposit real GEN into the contract's own custody.
 
-        GenVM does not currently expose a way for contract code to send
-        native value back out once received (confirmed by introspecting
-        the runtime: gl.evm has no transfer/send primitive, and
-        gl.message only exposes read-only fields) — so holding real GEN
-        inside the contract would permanently trap it. Real GEN custody
-        and payouts are handled by an off-chain treasury wallet; this
-        ledger is the authoritative record of what it owes and to whom."""
+        The amount is read from gl.message.value — the authoritative
+        record of what was actually sent — never from a caller-supplied
+        parameter. The contract itself now holds the funds; payouts are
+        sent directly from here via _send_gen (see claim_grant), not by
+        an off-chain treasury wallet."""
         self._require_curator()
-        if atto_amount <= 0:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} Deposit must be positive")
-        self.treasury_atto = u256(int(self.treasury_atto) + atto_amount)
+        amount = gl.message.value
+        if amount <= u256(0):
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Deposit must be funded with GEN value")
+        self.treasury_atto = u256(int(self.treasury_atto) + int(amount))
         self._bump_stat("treasury_deposits")
-        self._audit("deposit_to_treasury", self._sender_hex(), {"atto": atto_amount})
+        self._audit("deposit_to_treasury", self._sender_hex(), {"atto": str(amount)})
 
     # =======================================================================
     # Developer registry (write)
@@ -1192,21 +1223,31 @@ Return ONLY JSON:
 
     @gl.public.write
     def claim_grant(self, grant_id: str) -> dict:
-        """Mark a grant claimed by its recipient wallet. This is the
-        authoritative, tamper-evident record that the grant is owed and
-        claimed; the backend's treasury wallet executes the matching
-        real GEN transfer as a plain native-value transaction once this
-        call finalizes (see docs/DEPLOYMENT.md — Treasury payouts)."""
+        """Claim a grant and pay it out in real GEN, directly from this
+        contract's own custody — no off-chain treasury wallet involved.
+
+        Checks-effects-interactions: the grant is marked claimed and the
+        treasury ledger is debited and persisted BEFORE the transfer is
+        attempted, so a second claim call (re-entrant or repeated) finds
+        the grant already claimed and the balance it would draw from
+        already reduced — double-spend is structurally impossible."""
         self._require_not_paused()
         grant = self._load("grant", grant_id)
         if grant["claimed"]:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Grant already claimed")
         if grant["wallet"] != self._sender_hex():
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Only the recipient may claim")
+        amount = u256(int(grant["amount_atto"]))
+        if amount <= u256(0):
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} No amount owed on this grant")
+        if amount > self.treasury_atto:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Contract balance insufficient for claim")
         grant["claimed"] = True
+        self.treasury_atto = u256(int(self.treasury_atto) - int(amount))
         self._save("grant", grant_id, grant)
         self._bump_stat("grants_claimed")
-        self._audit("claim_grant", self._sender_hex(), {"id": grant_id})
+        self._audit("claim_grant", self._sender_hex(), {"id": grant_id, "atto": str(amount)})
+        _send_gen(grant["wallet"], amount)
         return {"id": grant_id, "claimed": True, "amount_atto": grant["amount_atto"]}
 
     # =======================================================================
