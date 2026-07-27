@@ -17,7 +17,7 @@ ImpactDNA flips the traditional grants model: instead of funding proposals befor
 
 Constructor: `platform_name="Impact_DNA"`, `min_eligible_score=40` (owner-adjustable from the admin panel).
 
-This is a freshly redeployed contract that moves real GEN custody in-contract (see [Real GEN escrow](#real-gen-escrow-held-directly-in-the-contract) below) — the escrow/payout path itself is proven working via an isolated probe on this exact pinned runner, but the full lifecycle hasn't yet been re-run end-to-end against *this specific deployment*. The previous deployment's full lifecycle — register → verify → submit → evaluate → open epoch → close epoch → claim → real GEN transfer, plus `detect_manipulation` and `request_appeal`/`resolve_appeal` — was exercised live with 5-validator consensus throughout, including a real 50 GEN payout on claim.
+This is a freshly redeployed contract that moves real GEN custody in-contract (see [Real GEN escrow](#real-gen-escrow-held-directly-in-the-contract) below). Ownership has been transferred to the app's own curator wallet, and a real 10 GEN deposit has been confirmed landing directly in the contract's balance on *this specific deployment*. The rest of the lifecycle — submit → evaluate → open epoch → close epoch → claim (atomic payout) — is queued for a fresh end-to-end pass; the previous deployment's full lifecycle, including a real 50 GEN payout on claim, `detect_manipulation`, and `request_appeal`/`resolve_appeal`, was already exercised live with 5-validator consensus throughout, on the same escrow mechanism now used directly by this contract.
 
 ## How it works
 
