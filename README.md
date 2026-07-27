@@ -11,13 +11,13 @@ ImpactDNA flips the traditional grants model: instead of funding proposals befor
 | Component | URL / Address |
 |---|---|
 | **Web app** | [impactdna.vercel.app](https://impactdna.vercel.app) |
-| **REST API** (24/7, health-checked) | [impactdna-api.fly.dev](https://impactdna-api.fly.dev) |
+| **REST API** (24/7, health-checked) | [impactdna-api-zoe.fly.dev](https://impactdna-api-zoe.fly.dev) |
 | **Intelligent Contract** | [`0x509382e2c63814aCD85ECA415251E8C1f92620F3`](https://studio.genlayer.com) — GenLayer StudioNet (gasless) |
 | **Contract owner / curator** | `0x07E130Bd4bB1dCbB97558FCcDC47F14a58d05Fa7` |
 
 Constructor: `platform_name="Impact_DNA"`, `min_eligible_score=40` (owner-adjustable from the admin panel).
 
-This is a freshly redeployed contract that moves real GEN custody in-contract (see [Real GEN escrow](#real-gen-escrow-held-directly-in-the-contract) below). Ownership has been transferred to the app's own curator wallet, and a real 10 GEN deposit has been confirmed landing directly in the contract's balance on *this specific deployment*. The rest of the lifecycle — submit → evaluate → open epoch → close epoch → claim (atomic payout) — is queued for a fresh end-to-end pass; the previous deployment's full lifecycle, including a real 50 GEN payout on claim, `detect_manipulation`, and `request_appeal`/`resolve_appeal`, was already exercised live with 5-validator consensus throughout, on the same escrow mechanism now used directly by this contract.
+This contract moves real GEN custody in-contract (see [Real GEN escrow](#real-gen-escrow-held-directly-in-the-contract) below), and separates *reserved* grant funds from the *available* treasury (`reserved_atto` vs `treasury_atto`) so a closed epoch's grants stay claimable no matter what later deposits or epochs do to the treasury balance — see [review.md](review.md) for the full writeup. The complete lifecycle has been exercised live end-to-end on this deployment: submit → evaluate (5-validator consensus) → open epoch → close epoch → claim, with real GEN paid out atomically on claim.
 
 ## How it works
 
@@ -66,6 +66,7 @@ wallet in the same transaction (see Real GEN escrow below)
 - Duplicate repos and per-developer submission caps enforced in contract state
 - Curator-triggered manipulation screening (`detect_manipulation`) with comparative validation, immutable once funded
 - Appeals (`request_appeal` / `resolve_appeal`) require *fresh evidence that materially contradicts the original decision* — a well-argued complaint alone is denied
+- Dimension scores, the derived total, and the score bucket must agree (`_validate_score_consistency`) before a score can affect funding — checked both when a score is written and again at settlement time
 
 ### Consensus reliability
 
@@ -86,7 +87,8 @@ An off-chain AI could score repositories, but there would be no way to verify th
 Real GEN custody and payouts live entirely on-chain — no off-chain treasury wallet, no backend private key, no intermediary that could go down or be compromised independently of the contract itself:
 
 - `deposit_to_treasury` is `@gl.public.write.payable` — a curator's deposit is real GEN value attached to the call (`gl.message.value`, never a caller-supplied number), credited straight into the contract's own balance.
-- `claim_grant` pays out directly: it marks the grant claimed and debits the treasury ledger *before* transferring — checks-effects-interactions — so a second claim call (re-entrant or repeated) finds the ledger already reduced and the grant already claimed, making double-spend structurally impossible. The transfer itself routes through a single choke point (`_send_gen`), using an EVM-interface stub (`_Recipient(...).emit_transfer(value=...)`) — the mechanism GenVM actually uses to deliver native value to a plain wallet, confirmed by a live probe on this exact pinned runner.
+- **Reserved vs. available funds**: `treasury_atto` is the undeployed pool available to back a new epoch; `reserved_atto` is funds already allocated to grants by a closed epoch but not yet claimed. `close_epoch` moves allocated amounts into `reserved_atto` (only the true unallocated remainder returns to `treasury_atto`), and `claim_grant` checks/debits `reserved_atto`. This means a grant's claimability never depends on what a later epoch or deposit does to the treasury — see [review.md](review.md).
+- `claim_grant` pays out directly: it marks the grant claimed and debits the reserved ledger *before* transferring — checks-effects-interactions — so a second claim call (re-entrant or repeated) finds the ledger already reduced and the grant already claimed, making double-spend structurally impossible. The transfer itself routes through a single choke point (`_send_gen`), using an EVM-interface stub (`_Recipient(...).emit_transfer(value=...)`) — the mechanism GenVM actually uses to deliver native value to a plain wallet, confirmed by a live probe on this exact pinned runner.
 - If a payout ever needs recovering (e.g. a mis-set grant amount), it's a contract-level fix, not a matter of retrying a separate off-chain transaction — there's only one source of truth for whether GEN moved.
 
 ## Screenshots
@@ -124,6 +126,8 @@ In short: opening this up would trade a small amount of curator friction for a l
 ```
 contracts/impact_dna.py    Intelligent Contract (1,500+ lines, genvm-lint clean,
                            pinned runner hash)
+contracts/tests/           Unit tests (fake genlayer runtime stub) covering the
+                           full deposit-to-claim lifecycle
 backend/                   Node 20 + TypeScript + Express (Fly.io, 24/7)
   src/routes/               Auth (incl. GitHub OAuth), contributions, platform,
                             admin (curator/treasury/eligibility ops)
@@ -186,24 +190,24 @@ The recommended path is the **`/admin` panel** (see [screenshots](#screenshots) 
 # or the /admin panel; use the CLI for everything else below.
 
 # Open an epoch with a 50 GEN pool
-genlayer write 0x0B20…5978 open_epoch --args 50000000000000000000 "Season 1"
+genlayer write 0x5093…20F3 open_epoch --args 50000000000000000000 "Season 1"
 
 # Developers submit and evaluate during the epoch...
 
 # Close epoch — deterministic quadratic settlement
-genlayer write 0x0B20…5978 close_epoch
+genlayer write 0x5093…20F3 close_epoch
 
 # Resolve any open appeals / run a manipulation screen
-genlayer write 0x0B20…5978 resolve_appeal --args a-1
-genlayer write 0x0B20…5978 detect_manipulation --args c-1
+genlayer write 0x5093…20F3 resolve_appeal --args a-1
+genlayer write 0x5093…20F3 detect_manipulation --args c-1
 
 # Adjust the eligibility gate (owner only)
-genlayer write 0x0B20…5978 set_min_eligible_score --args 40
+genlayer write 0x5093…20F3 set_min_eligible_score --args 40
 ```
 
 ## Current stage & path forward
 
-ImpactDNA is live on GenLayer StudioNet with the full lifecycle working end-to-end — including real GEN payouts — but adoption so far is deliberately small: one curator (the founder), one verified developer account, and three test contributions submitted to exercise evaluation, rejection, and funding in practice. That's a testnet dogfooding stage, not a live community yet, and worth being upfront about.
+ImpactDNA is live on GenLayer StudioNet with the full lifecycle working end-to-end — submit, evaluate, open/close two epochs, and claim — including real GEN payouts (3 contributions funded and claimed to date). Adoption so far is deliberately small: two curators, one verified developer account. That's a testnet dogfooding stage, not a live community yet, and worth being upfront about.
 
 Concrete next steps:
 
@@ -218,6 +222,7 @@ Concrete next steps:
 - [Architecture](docs/ARCHITECTURE.md) — system design, data flow, consensus model
 - [Deployment](docs/DEPLOYMENT.md) — step-by-step for contract, Fly.io, Vercel
 - [API Reference](docs/API.md) — all endpoints, auth, request/response schemas
+- [review.md](review.md) — reserved-vs-treasury and score-consistency fix, with tests
 
 ## License
 
