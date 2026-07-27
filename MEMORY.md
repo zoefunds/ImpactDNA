@@ -4,10 +4,10 @@ A running log of decisions, state, and operational facts. Update as the project 
 
 ## Deployed state
 
-- **Intelligent Contract**: `0x0B20d8C224FE2BE01469C70663C0eEcbBD155978` on **GenLayer StudioNet** (gasless).
+- **Intelligent Contract**: `0x509382e2c63814aCD85ECA415251E8C1f92620F3` on **GenLayer StudioNet** (gasless).
   - Constructor used: `platform_name="Impact_DNA"`, `min_eligible_score=40` (owner-adjustable on-chain via `set_min_eligible_score`, exposed in the `/admin` panel).
   - Contract owner: `0x07E130Bd4bB1dCbB97558FCcDC47F14a58d05Fa7` (ownership transferred here from the original Studio deployer account so the app's own admin wallet can act as owner/curator without touching Studio again).
-  - Previous deployments (superseded): `0x2B4DE4E66Bbfbe173b6E511583d5A66f7BF58267`, `0x8284169B3c5E5c03A893Ea6b087661b2Ebd1e24f`, `0x2403a1bCc526AC1370a5577c5c4712F5Af1F5749`.
+  - Previous deployments (superseded): `0x0B20d8C224FE2BE01469C70663C0eEcbBD155978`, `0x2B4DE4E66Bbfbe173b6E511583d5A66f7BF58267`, `0x8284169B3c5E5c03A893Ea6b087661b2Ebd1e24f`, `0x2403a1bCc526AC1370a5577c5c4712F5Af1F5749`.
   - Treasury custody moved on-chain with this deploy — real GEN now lives directly in the contract, not an off-chain wallet. The old treasury EOA (`0xb062F2d0B911EDaAD359e00D7940bd5e954973aE`) is retired; it may still hold a real balance from the prior deployment that hasn't been swept.
 - **Backend**: Fly.io app `impactdna-api` (region iad), 24/7 — `auto_stop_machines="off"`, `min_machines_running=1`, restart policy always.
 - **Frontend**: Vercel (Next.js 14).

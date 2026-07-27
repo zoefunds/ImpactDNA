@@ -327,6 +327,24 @@ def _leader_error_agreement(leaders_res, rerun_fn) -> bool:
         return False
 
 
+def _validate_score_consistency(dims: dict, total: int, bucket: int) -> None:
+    """Guard the invariant that funding math relies on: the per-dimension
+    scores must sum to the recorded total, and the recorded bucket must
+    be the bucket that total actually falls into. This is checked once
+    when a score is written (evaluate_contribution) and again right
+    before it is used to compute a grant weight (close_epoch), so a
+    corrupted or hand-edited record can never silently skew payouts."""
+    dim_sum = sum(int(v) for v in dims.values())
+    if dim_sum != int(total):
+        raise gl.vm.UserError(
+            f"{ERROR_EXPECTED} Dimension scores ({dim_sum}) do not sum to total ({total})"
+        )
+    if _bucket(int(total)) != int(bucket):
+        raise gl.vm.UserError(
+            f"{ERROR_EXPECTED} Score bucket ({bucket}) does not match total ({total})"
+        )
+
+
 def _weight_for_score(total: int) -> int:
     """Funding weight: quadratic-ish emphasis on high impact while still
     rewarding mid-tier work. Deterministic integer math only."""
@@ -380,7 +398,8 @@ class ImpactDNA(gl.Contract):
     grant_ids: DynArray[str]
     grant_count: u256
     total_granted_atto: u256
-    treasury_atto: u256
+    treasury_atto: u256  # available, unallocated funds (may back a new epoch)
+    reserved_atto: u256  # funds committed to closed-epoch grants, unclaimed
 
     # ---- appeals ------------------------------------------------------------
     appeals: TreeMap[str, str]  # appeal id (a-<n>) -> JSON appeal record
@@ -416,6 +435,7 @@ class ImpactDNA(gl.Contract):
         self.audit_count = u256(0)
         self.total_granted_atto = u256(0)
         self.treasury_atto = u256(0)
+        self.reserved_atto = u256(0)
         self.current_epoch = ""
 
         gate = min_eligible_score
@@ -935,6 +955,7 @@ Return ONLY JSON:
             return True
 
         result = gl.vm.run_nondet_unsafe(leader_fn, validator_fn)
+        _validate_score_consistency(result["dims"], result["total"], result["bucket"])
 
         record["status"] = ST_EVALUATED if result["eligible"] else ST_REJECTED
         record["score_total"] = int(result["total"])
@@ -1155,6 +1176,7 @@ Return ONLY JSON:
             scanned += 1
             if c["status"] != ST_EVALUATED or not c["eligible"] or c["manipulation_flag"]:
                 continue
+            _validate_score_consistency(c["dimensions"], c["score_total"], c["score_bucket"])
             w = _weight_for_score(int(c["score_total"]))
             if w <= 0:
                 continue
@@ -1197,8 +1219,13 @@ Return ONLY JSON:
             epoch["grant_ids"].append(gid)
             grant_summaries.append({"grant": gid, "contribution": cid, "amount_atto": str(amount)})
 
-        # Unallocated remainder returns to treasury.
+        # Allocated funds move into the reserved bucket, walled off from
+        # the general treasury so they stay claimable regardless of what
+        # later epochs or deposits do to treasury_atto. Only the
+        # unallocated remainder returns to available treasury.
         remainder = pool - allocated
+        if allocated > 0:
+            self.reserved_atto = u256(int(self.reserved_atto) + allocated)
         if remainder > 0:
             self.treasury_atto = u256(int(self.treasury_atto) + remainder)
 
@@ -1240,10 +1267,10 @@ Return ONLY JSON:
         amount = u256(int(grant["amount_atto"]))
         if amount <= u256(0):
             raise gl.vm.UserError(f"{ERROR_EXPECTED} No amount owed on this grant")
-        if amount > self.treasury_atto:
+        if amount > self.reserved_atto:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Contract balance insufficient for claim")
         grant["claimed"] = True
-        self.treasury_atto = u256(int(self.treasury_atto) - int(amount))
+        self.reserved_atto = u256(int(self.reserved_atto) - int(amount))
         self._save("grant", grant_id, grant)
         self._bump_stat("grants_claimed")
         self._audit("claim_grant", self._sender_hex(), {"id": grant_id, "atto": str(amount)})
@@ -1401,6 +1428,7 @@ is denied. Return ONLY JSON:
             "appeal_count": int(self.appeal_count),
             "current_epoch": self.current_epoch,
             "treasury_atto": str(int(self.treasury_atto)),
+            "reserved_atto": str(int(self.reserved_atto)),
             "total_granted_atto": str(int(self.total_granted_atto)),
         }
 

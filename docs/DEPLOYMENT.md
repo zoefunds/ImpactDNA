@@ -2,7 +2,7 @@
 
 ## 1. Intelligent Contract (GenLayer Studio — already deployed)
 
-Deployed to StudioNet at `0x0B20d8C224FE2BE01469C70663C0eEcbBD155978`.
+Deployed to StudioNet at `0x509382e2c63814aCD85ECA415251E8C1f92620F3`.
 
 To redeploy (e.g. after changes):
 1. Open https://studio.genlayer.com, create/select an account.
@@ -39,7 +39,7 @@ fly secrets set \
   REDIS_URL="rediss://…upstash…" \
   BREVO_API_KEY="xkeysib-…" \
   BREVO_SENDER_EMAIL="preciousmofeoluwa@gmail.com" \
-  GENLAYER_CONTRACT_ADDRESS="0x0B20d8C224FE2BE01469C70663C0eEcbBD155978" \
+  GENLAYER_CONTRACT_ADDRESS="0x509382e2c63814aCD85ECA415251E8C1f92620F3" \
   GITHUB_CLIENT_ID="…" \
   GITHUB_CLIENT_SECRET="…" \
   GITHUB_OAUTH_CALLBACK_URL="https://impactdna-api.fly.dev/api/auth/github/callback" \

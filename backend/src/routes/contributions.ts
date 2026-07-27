@@ -8,6 +8,12 @@ import { rateLimit } from "../middleware/rateLimit.js";
 import { wrap, validateBody, HttpError } from "../middleware/errors.js";
 import { sendEmail, notifyEmail } from "../lib/email.js";
 import { logger } from "../lib/logger.js";
+import { config } from "../config.js";
+
+// contribution_mirror rows are scoped by the contract address that
+// assigned their on-chain ID, since a redeployed contract restarts its
+// own ID counter from c-1 and would otherwise collide with history.
+const CONTRACT_ADDRESS = config.GENLAYER_CONTRACT_ADDRESS;
 
 /**
  * Authenticated on-chain actions. Each write is signed with the calling
@@ -108,10 +114,10 @@ contributionsRouter.post(
         cid = onchain?.id ?? null;
       }
       await query(
-        `INSERT INTO contribution_mirror (contribution_id, user_id, repo, category, tx_hash)
-         VALUES ($1,$2,$3,$4,$5)
-         ON CONFLICT (contribution_id) DO NOTHING`,
-        [cid ?? `tx-${result.txHash.slice(0, 18)}`, req.user!.id, repo, category, result.txHash],
+        `INSERT INTO contribution_mirror (contribution_id, user_id, repo, category, tx_hash, contract_address)
+         VALUES ($1,$2,$3,$4,$5,$6)
+         ON CONFLICT (contract_address, contribution_id) DO NOTHING`,
+        [cid ?? `tx-${result.txHash.slice(0, 18)}`, req.user!.id, repo, category, result.txHash, CONTRACT_ADDRESS],
       );
     } catch (err) {
       logger.warn({ err }, "mirror insert failed");
@@ -140,13 +146,14 @@ contributionsRouter.post(
         `UPDATE contribution_mirror
          SET contribution_id = $1, status = $2, score_total = $3, eligible = $4,
              payload = $5, updated_at = now()
-         WHERE repo = $6 OR contribution_id = $1`,
+         WHERE contract_address = $6 AND (repo = $7 OR contribution_id = $1)`,
         [
           contributionId,
           String(onchain.status ?? "evaluated"),
           Number(onchain.score_total ?? 0),
           Boolean(onchain.eligible),
           JSON.stringify(onchain ?? {}),
+          CONTRACT_ADDRESS,
           String(onchain.repo ?? ""),
         ],
       );
@@ -204,15 +211,65 @@ contributionsRouter.post(
   }),
 );
 
+// Reconcile every on-chain contribution belonging to this developer into
+// contribution_mirror, including ones with no row at all — e.g. an
+// insert that no-op'd because a contract redeploy's fresh c-N collided
+// with a bare-ID row left over from a previous contract deployment.
+// Mirror completeness (not just the chain) is what the dashboard reads,
+// so a missing row means a real submission never shows an Evaluate
+// button; this closes that gap regardless of how a row went missing.
+async function reconcileMineFromChain(userId: string, githubUsername: string | null): Promise<void> {
+  if (!githubUsername) return;
+  const pageSize = 50;
+  const maxPages = 10; // matches the per-developer submission cap (25) with headroom
+  let offset = 0;
+  for (let page = 0; page < maxPages; page++) {
+    const batch = (await contractRead("list_contributions", [offset, pageSize, ""], 30)) as {
+      total: number;
+      items: Array<Record<string, unknown>>;
+    };
+    for (const c of batch.items) {
+      if (c.developer !== githubUsername) continue;
+      await query(
+        `INSERT INTO contribution_mirror
+           (contribution_id, user_id, repo, category, status, score_total, eligible, contract_address)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+         ON CONFLICT (contract_address, contribution_id) DO UPDATE
+           SET status = EXCLUDED.status, score_total = EXCLUDED.score_total,
+               eligible = EXCLUDED.eligible, updated_at = now()`,
+        [
+          String(c.id),
+          userId,
+          String(c.repo ?? ""),
+          String(c.category ?? "library"),
+          String(c.status ?? "submitted"),
+          Number(c.score_total ?? 0),
+          Boolean(c.eligible),
+          CONTRACT_ADDRESS,
+        ],
+      ).catch((err) => logger.warn({ err }, "mirror chain reconcile failed"));
+    }
+    offset += pageSize;
+    if (offset >= batch.total) break;
+  }
+}
+
 // ------------------------------------------------------------ my submissions
 contributionsRouter.get(
   "/mine",
   requireAuth,
   wrap(async (req, res) => {
+    const userRow = await query("SELECT github_username FROM users WHERE id = $1", [req.user!.id]);
+    const githubUsername = (userRow.rows[0]?.github_username as string | null) ?? null;
+    await reconcileMineFromChain(req.user!.id, githubUsername).catch((err) =>
+      logger.warn({ err }, "mine reconcile failed"),
+    );
+
     const rows = await query(
       `SELECT contribution_id, repo, category, status, score_total, eligible, tx_hash, created_at
-       FROM contribution_mirror WHERE user_id = $1 ORDER BY created_at DESC LIMIT 100`,
-      [req.user!.id],
+       FROM contribution_mirror WHERE user_id = $1 AND contract_address = $2
+       ORDER BY created_at DESC LIMIT 100`,
+      [req.user!.id, CONTRACT_ADDRESS],
     );
 
     // Self-heal rows stored under a fallback tx- id (or left stale) by
@@ -235,8 +292,8 @@ contributionsRouter.get(
             void query(
               `UPDATE contribution_mirror
                SET contribution_id = $1, status = $2, score_total = $3, eligible = $4, updated_at = now()
-               WHERE repo = $5 AND user_id = $6`,
-              [fixed.contribution_id, fixed.status, fixed.score_total, fixed.eligible, row.repo, req.user!.id],
+               WHERE repo = $5 AND user_id = $6 AND contract_address = $7`,
+              [fixed.contribution_id, fixed.status, fixed.score_total, fixed.eligible, row.repo, req.user!.id, CONTRACT_ADDRESS],
             ).catch((err) => logger.warn({ err }, "mirror self-heal failed"));
           }
           return fixed;
