@@ -1,6 +1,7 @@
 import { Router } from "express";
-import { contractRead, contractConfigured, contractAddress } from "../lib/genlayer.js";
+import { contractRead, contractConfigured, contractAddress, invalidateRead } from "../lib/genlayer.js";
 import { wrap } from "../middleware/errors.js";
+import { runRelayTick } from "../jobs/relay.js";
 
 /**
  * Public read endpoints — proxied contract views with caching so the
@@ -95,6 +96,20 @@ platformRouter.get(
   "/appeals",
   wrap(async (_req, res) => {
     res.json(await contractRead("list_appeals", [], 120));
+  }),
+);
+
+// Nudge the relay loop right after the frontend's own on-chain deposit,
+// so the deposit shows up in the epoch's pool without waiting for the
+// next scheduled tick. Best-effort — the scheduled loop (jobs/relay.ts)
+// is the real source of truth and will pick it up regardless.
+platformRouter.post(
+  "/deposits/sync",
+  wrap(async (req, res) => {
+    const epochId = String((req.body as { epochId?: string })?.epochId ?? "");
+    void runRelayTick().catch(() => undefined);
+    if (epochId) await invalidateRead("get_epoch", [epochId]);
+    res.json({ ok: true });
   }),
 );
 

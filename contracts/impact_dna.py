@@ -1,4 +1,4 @@
-# v0.2.17
+# v0.3.0
 # { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
 
 import json
@@ -7,37 +7,15 @@ import typing
 
 from genlayer import *
 
-
-@gl.evm.contract_interface
-class _Recipient:
-    """EVM-interface stub used solely to route native GEN payouts through
-    GenLayer's EVM-compatibility layer. This is the mechanism confirmed
-    (by live probe against this exact pinned runner) to actually deliver
-    value to a plain wallet (EOA): `gl.get_contract_at(addr).emit_transfer(...)`
-    (the pattern shown in genvm's own docs/examples) instead fails with
-    "Contract ... not found" against any address without deployed
-    contract code, which is what every user's custodial wallet is.
-    Route ALL payouts through _send_gen below — never call emit_transfer
-    directly elsewhere."""
-
-    class View:
-        pass
-
-    class Write:
-        pass
-
-
-def _send_gen(to_address: str, amount: u256) -> None:
-    """Single choke point for every native GEN payout this contract
-    makes. Callers must zero the ledger field the amount is drawn from
-    and persist state BEFORE calling this — state mutation always
-    precedes the external transfer, so there is no reentrancy window
-    where a payout could be claimed twice."""
-    if not to_address:
-        raise gl.vm.UserError(f"{ERROR_EXPECTED} Missing recipient address")
-    if amount <= u256(0):
-        raise gl.vm.UserError(f"{ERROR_EXPECTED} Transfer amount must be positive")
-    _Recipient(Address(to_address)).emit_transfer(value=amount)
+# ---------------------------------------------------------------------------
+# Funding lives off-chain from GenLayer's perspective: real USDC custody and
+# payouts happen in an escrow contract on Base Sepolia
+# (contracts/base/ImpactDnaEscrow.sol). This contract is the authoritative
+# ledger (epochs, scores, grant amounts) and a single trusted relayer
+# bridges the two chains — the same pattern used by meme-olympics'
+# baseSepolia.ts relay and Event-Weaver's stakeRelay.js. Every relayer-only
+# write here takes a `base_tx_hash` and is idempotent on it, so a retried
+# relay sweep can never double-apply a deposit or a claim.
 
 
 # ---------------------------------------------------------------------------
@@ -366,6 +344,9 @@ class ImpactDNA(gl.Contract):
     paused: bool
     curators: TreeMap[str, bool]  # address hex -> active
     curator_count: u256
+    relayer: Address  # backend relayer authorized to bridge Base Sepolia <-> here
+    # base_tx_hash -> True, guards every relayer write against double-apply
+    processed_base_tx: TreeMap[str, bool]
 
     # config values are stored as string to keep one homogeneous map
     config: TreeMap[str, str]
@@ -392,14 +373,13 @@ class ImpactDNA(gl.Contract):
     epochs: TreeMap[str, str]  # epoch id (e-<n>) -> JSON epoch record
     epoch_ids: DynArray[str]
     epoch_count: u256
-    current_epoch: str  # "" when none open
 
     grants: TreeMap[str, str]  # grant id (g-<n>) -> JSON grant record
     grant_ids: DynArray[str]
     grant_count: u256
-    total_granted_atto: u256
-    treasury_atto: u256  # available, unallocated funds (may back a new epoch)
-    reserved_atto: u256  # funds committed to closed-epoch grants, unclaimed
+    total_granted_usdc: u256
+    treasury_usdc: u256  # available, unallocated funds (may back a new epoch)
+    reserved_usdc: u256  # funds committed to closed-epoch grants, unclaimed
 
     # ---- appeals ------------------------------------------------------------
     appeals: TreeMap[str, str]  # appeal id (a-<n>) -> JSON appeal record
@@ -425,6 +405,7 @@ class ImpactDNA(gl.Contract):
                             funded (default recommendation: 40)
         """
         self.owner = gl.message.sender_address
+        self.relayer = gl.message.sender_address  # owner is relayer until set_relayer()
         self.paused = False
         self.curator_count = u256(0)
         self.developer_count = u256(0)
@@ -433,17 +414,16 @@ class ImpactDNA(gl.Contract):
         self.grant_count = u256(0)
         self.appeal_count = u256(0)
         self.audit_count = u256(0)
-        self.total_granted_atto = u256(0)
-        self.treasury_atto = u256(0)
-        self.reserved_atto = u256(0)
-        self.current_epoch = ""
+        self.total_granted_usdc = u256(0)
+        self.treasury_usdc = u256(0)
+        self.reserved_usdc = u256(0)
 
         gate = min_eligible_score
         if gate < 0 or gate > TOTAL_MAX:
             gate = 40
         self.config["platform_name"] = (platform_name or "ImpactDNA")[:80]
         self.config["min_eligible_score"] = str(gate)
-        self.config["version"] = "1.0.0"
+        self.config["version"] = "2.0.0"
         self.config["max_contributions_per_dev"] = str(MAX_CONTRIBUTIONS_PER_DEV)
 
         # deployer is the first curator
@@ -470,6 +450,10 @@ class ImpactDNA(gl.Contract):
     def _require_curator(self) -> None:
         if not self.curators.get(self._sender_hex(), False):
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Only a curator may call this")
+
+    def _require_relayer(self) -> None:
+        if gl.message.sender_address != self.relayer:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Only the relayer may call this")
 
     def _audit(self, action: str, actor: str, payload: dict) -> None:
         entry = {
@@ -610,22 +594,47 @@ class ImpactDNA(gl.Contract):
         self.config["min_eligible_score"] = str(score)
         self._audit("set_min_eligible_score", self._sender_hex(), {"score": score})
 
-    @gl.public.write.payable
-    def deposit_to_treasury(self) -> None:
-        """Deposit real GEN into the contract's own custody.
+    @gl.public.write
+    def set_relayer(self, relayer: str) -> None:
+        """Point at the backend service authorized to bridge Base Sepolia
+        USDC deposits/claims into this ledger."""
+        self._require_owner()
+        self.relayer = Address(relayer)
+        self._audit("set_relayer", self._sender_hex(), {"relayer": self.relayer.as_hex})
 
-        The amount is read from gl.message.value — the authoritative
-        record of what was actually sent — never from a caller-supplied
-        parameter. The contract itself now holds the funds; payouts are
-        sent directly from here via _send_gen (see claim_grant), not by
-        an off-chain treasury wallet."""
-        self._require_curator()
-        amount = gl.message.value
-        if amount <= u256(0):
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} Deposit must be funded with GEN value")
-        self.treasury_atto = u256(int(self.treasury_atto) + int(amount))
+    @gl.public.write
+    def record_deposit(self, epoch_id: str, depositor: str, amount_usdc: int, base_tx_hash: str) -> None:
+        """Relayer-only: record a USDC deposit that landed in the Base
+        Sepolia escrow contract (contracts/base/ImpactDnaEscrow.sol),
+        under the given epoch's escrow pool. Anyone may deposit into any
+        open epoch — this just credits that epoch's pool_usdc, which
+        close_epoch later splits among its eligible contributions using
+        the same quadratic weighting regardless of who funded it.
+
+        Real custody lives on Base Sepolia, not here — this call only
+        updates the ledger this contract uses to close funding epochs.
+        Idempotent on base_tx_hash so a retried relay sweep can never
+        double-count the same on-chain deposit."""
+        self._require_relayer()
+        if amount_usdc <= 0:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Deposit amount must be positive")
+        if not base_tx_hash:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Missing base_tx_hash")
+        if self.processed_base_tx.get(base_tx_hash, False):
+            return
+        self.processed_base_tx[base_tx_hash] = True
+        epoch = self._load("epoch", epoch_id)
+        if epoch["status"] != EPOCH_OPEN:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Epoch is not open for deposits")
+        epoch["pool_usdc"] = str(int(epoch["pool_usdc"]) + amount_usdc)
+        self._save("epoch", epoch_id, epoch)
+        self.treasury_usdc = u256(int(self.treasury_usdc) + amount_usdc)
         self._bump_stat("treasury_deposits")
-        self._audit("deposit_to_treasury", self._sender_hex(), {"atto": str(amount)})
+        self._audit(
+            "record_deposit",
+            depositor,
+            {"epoch": epoch_id, "usdc": amount_usdc, "base_tx_hash": base_tx_hash},
+        )
 
     # =======================================================================
     # Developer registry (write)
@@ -654,7 +663,7 @@ class ImpactDNA(gl.Contract):
             "github_created_at": "",
             "total_score": 0,
             "funded_count": 0,
-            "total_granted_atto": "0",
+            "total_granted_usdc": "0",
             "registered_seq": int(self.audit_count),
         }
         self._save("developer", username, record)
@@ -711,16 +720,21 @@ class ImpactDNA(gl.Contract):
 
     @gl.public.write
     def submit_contribution(
-        self, repo_full_name: str, category: str, description: str
+        self, repo_full_name: str, category: str, description: str, epoch_id: str
     ) -> str:
         """Submit an already-shipped open-source repository for
-        retroactive impact evaluation. The caller must be a verified
-        developer, and the repository owner must match their verified
-        GitHub identity (checked against live GitHub data at
-        evaluation time)."""
+        retroactive impact evaluation, into a specific open epoch (epochs
+        are permissionless — see open_epoch — so a submitter picks which
+        one to compete in). The caller must be a verified developer, and
+        the repository owner must match their verified GitHub identity
+        (checked against live GitHub data at evaluation time)."""
         self._require_not_paused()
         repo = _validate_repo_name(repo_full_name)
         repo_key = repo.lower()
+
+        epoch = self._load("epoch", epoch_id)
+        if epoch["status"] != EPOCH_OPEN:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Epoch is not open")
 
         if category not in VALID_CATEGORIES:
             raise gl.vm.UserError(
@@ -759,7 +773,7 @@ class ImpactDNA(gl.Contract):
             "developer": username,
             "wallet": sender,
             "status": ST_SUBMITTED,
-            "epoch": self.current_epoch,
+            "epoch": epoch_id,
             "score_total": 0,
             "score_bucket": 0,
             "dimensions": {},
@@ -769,7 +783,7 @@ class ImpactDNA(gl.Contract):
             "manipulation_summary": "",
             "evidence": {},
             "evaluations": 0,
-            "granted_atto": "0",
+            "granted_usdc": "0",
             "submitted_seq": int(self.audit_count),
         }
         self._save("contribution", cid, record)
@@ -965,7 +979,6 @@ Return ONLY JSON:
         record["evaluation_summary"] = result["summary"]
         record["evidence"] = result["evidence"]
         record["evaluations"] = int(record.get("evaluations", 0)) + 1
-        record["epoch"] = self.current_epoch
         self._save("contribution", contribution_id, record)
 
         dev = self._load("developer", record["developer"])
@@ -1113,25 +1126,28 @@ Return ONLY JSON:
     # =======================================================================
 
     @gl.public.write
-    def open_epoch(self, pool_atto: int, label: str) -> str:
-        """Open a funding epoch backed by the treasury. Contributions
-        evaluated while the epoch is open compete for its pool."""
+    def open_epoch(self, label: str) -> str:
+        """Open a permissionless funding epoch: anyone may open one and
+        name it. It starts unfunded — the opener (or anyone else) then
+        deposits USDC into it on the Base Sepolia escrow, keyed by this
+        epoch's id (see record_deposit). Multiple epochs may be open at
+        once; a submitter picks which one to compete in at submission
+        time (submit_contribution's epoch_id argument). The grant-sharing
+        formula (quadratic score weighting, see close_epoch) is unchanged
+        regardless of who opened or funded the epoch."""
         self._require_not_paused()
-        self._require_curator()
-        if self.current_epoch:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} An epoch is already open")
-        if pool_atto <= 0:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} Pool must be positive")
-        if pool_atto > int(self.treasury_atto):
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} Pool exceeds treasury balance")
+        clean_label = (label or "").strip()
+        if not clean_label:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Epoch label is required")
 
         eid = f"e-{int(self.epoch_count) + 1}"
         record = {
             "id": eid,
-            "label": (label or eid)[:80],
+            "label": clean_label[:80],
             "status": EPOCH_OPEN,
-            "pool_atto": str(pool_atto),
-            "allocated_atto": "0",
+            "opener": self._sender_hex(),
+            "pool_usdc": "0",
+            "allocated_usdc": "0",
             "contribution_ids": [],
             "grant_ids": [],
             "opened_seq": int(self.audit_count),
@@ -1140,27 +1156,29 @@ Return ONLY JSON:
         self._save("epoch", eid, record)
         self.epoch_ids.append(eid)
         self.epoch_count = u256(int(self.epoch_count) + 1)
-        self.current_epoch = eid
-        self.treasury_atto = u256(int(self.treasury_atto) - pool_atto)
-        self._audit("open_epoch", self._sender_hex(), {"id": eid, "pool_atto": pool_atto})
+        self._audit("open_epoch", self._sender_hex(), {"id": eid, "label": clean_label})
         return eid
 
     @gl.public.write
-    def close_epoch(self) -> dict:
-        """Close the open epoch and settle grants deterministically.
+    def close_epoch(self, epoch_id: str) -> dict:
+        """Close an open epoch and settle grants deterministically.
 
-        Every eligible, unflagged contribution evaluated during the
+        Callable by a curator, or by whoever opened this specific epoch
+        (permissionless epochs still need someone able to end their own
+        round). Every eligible, unflagged contribution submitted to the
         epoch receives pool * weight / total_weight, where weight is
-        score^2 (quadratic emphasis on high impact). Pure integer math —
-        no LLM, no web — so consensus is trivial for this step."""
+        score^2 (quadratic emphasis on high impact) — the same sharing
+        formula regardless of who opened or funded the epoch. Pure
+        integer math — no LLM, no web — so consensus is trivial here."""
         self._require_not_paused()
-        self._require_curator()
-        if not self.current_epoch:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} No epoch is open")
-
-        eid = self.current_epoch
+        eid = epoch_id
         epoch = self._load("epoch", eid)
-        pool = int(epoch["pool_atto"])
+        caller = self._sender_hex()
+        if not self.curators.get(caller, False) and epoch.get("opener") != caller:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Only a curator or this epoch's opener may close it")
+        if epoch["status"] != EPOCH_OPEN:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Epoch is not open")
+        pool = int(epoch["pool_usdc"])
 
         # Collect eligible contributions attributed to this epoch.
         winners = []
@@ -1197,9 +1215,12 @@ Return ONLY JSON:
                 "contribution": cid,
                 "developer": c["developer"],
                 "wallet": c["wallet"],
-                "amount_atto": str(amount),
+                "amount_usdc": str(amount),
                 "weight": w,
                 "claimed": False,
+                "relayed": False,
+                "relay_tx_hash": "",
+                "claim_tx_hash": "",
                 "created_seq": int(self.audit_count),
             }
             self._save("grant", gid, grant)
@@ -1208,74 +1229,93 @@ Return ONLY JSON:
             allocated += amount
 
             c["status"] = ST_FUNDED
-            c["granted_atto"] = str(amount)
+            c["granted_usdc"] = str(amount)
             self.contributions[cid] = json.dumps(c, sort_keys=True)
 
             dev = self._load("developer", c["developer"])
             dev["funded_count"] = int(dev.get("funded_count", 0)) + 1
-            dev["total_granted_atto"] = str(int(dev.get("total_granted_atto", "0")) + amount)
+            dev["total_granted_usdc"] = str(int(dev.get("total_granted_usdc", "0")) + amount)
             self._save("developer", c["developer"], dev)
 
             epoch["grant_ids"].append(gid)
-            grant_summaries.append({"grant": gid, "contribution": cid, "amount_atto": str(amount)})
+            grant_summaries.append({"grant": gid, "contribution": cid, "amount_usdc": str(amount)})
 
         # Allocated funds move into the reserved bucket, walled off from
-        # the general treasury so they stay claimable regardless of what
-        # later epochs or deposits do to treasury_atto. Only the
-        # unallocated remainder returns to available treasury.
+        # everything else so they stay claimable regardless of what later
+        # epochs do. Any unallocated remainder simply stays recorded on
+        # this now-closed epoch (its escrow pool on Base Sepolia keeps
+        # the actual USDC — the epoch's opener can withdraw dust there
+        # via ImpactDnaEscrow.withdrawUnallocated).
         remainder = pool - allocated
         if allocated > 0:
-            self.reserved_atto = u256(int(self.reserved_atto) + allocated)
-        if remainder > 0:
-            self.treasury_atto = u256(int(self.treasury_atto) + remainder)
+            self.reserved_usdc = u256(int(self.reserved_usdc) + allocated)
 
         epoch["status"] = EPOCH_CLOSED
-        epoch["allocated_atto"] = str(allocated)
+        epoch["allocated_usdc"] = str(allocated)
         epoch["closed_seq"] = int(self.audit_count)
         self._save("epoch", eid, epoch)
-        self.current_epoch = ""
-        self.total_granted_atto = u256(int(self.total_granted_atto) + allocated)
+        self.total_granted_usdc = u256(int(self.total_granted_usdc) + allocated)
         self._bump_stat("epochs_closed")
         self._audit(
             "close_epoch",
             self._sender_hex(),
-            {"id": eid, "allocated_atto": allocated, "grants": len(grant_summaries)},
+            {"id": eid, "allocated_usdc": allocated, "grants": len(grant_summaries)},
         )
         return {
             "epoch": eid,
-            "allocated_atto": str(allocated),
-            "returned_to_treasury_atto": str(remainder),
+            "allocated_usdc": str(allocated),
+            "unallocated_usdc": str(remainder),
             "grants": grant_summaries,
         }
 
     @gl.public.write
-    def claim_grant(self, grant_id: str) -> dict:
-        """Claim a grant and pay it out in real GEN, directly from this
-        contract's own custody — no off-chain treasury wallet involved.
+    def mark_grants_relayed(self, epoch_id: str, base_tx_hash: str) -> dict:
+        """Relayer-only: mark every grant in this epoch as pushed to the
+        Base Sepolia escrow's setGrants() call, after which recipients can
+        self-claim USDC directly there. Idempotent on base_tx_hash."""
+        self._require_relayer()
+        if self.processed_base_tx.get(base_tx_hash, False):
+            return {"epoch": epoch_id, "already_processed": True}
+        self.processed_base_tx[base_tx_hash] = True
+        epoch = self._load("epoch", epoch_id)
+        for gid in epoch["grant_ids"]:
+            grant = self._load("grant", gid)
+            grant["relayed"] = True
+            grant["relay_tx_hash"] = base_tx_hash
+            self._save("grant", gid, grant)
+        self._bump_stat("grant_batches_relayed")
+        self._audit(
+            "mark_grants_relayed",
+            self._sender_hex(),
+            {"epoch": epoch_id, "base_tx_hash": base_tx_hash, "grants": len(epoch["grant_ids"])},
+        )
+        return {"epoch": epoch_id, "already_processed": False, "grants": len(epoch["grant_ids"])}
 
-        Checks-effects-interactions: the grant is marked claimed and the
-        treasury ledger is debited and persisted BEFORE the transfer is
-        attempted, so a second claim call (re-entrant or repeated) finds
-        the grant already claimed and the balance it would draw from
-        already reduced — double-spend is structurally impossible."""
-        self._require_not_paused()
+    @gl.public.write
+    def mark_grant_claimed(self, grant_id: str, base_tx_hash: str) -> dict:
+        """Relayer-only: mark a grant claimed after observing the Claimed
+        event on the Base Sepolia escrow — the escrow holds the real USDC
+        and pays the recipient directly; this call only mirrors that fact
+        onto the ledger. Idempotent on base_tx_hash."""
+        self._require_relayer()
+        if self.processed_base_tx.get(base_tx_hash, False):
+            return {"id": grant_id, "already_processed": True}
+        self.processed_base_tx[base_tx_hash] = True
         grant = self._load("grant", grant_id)
         if grant["claimed"]:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} Grant already claimed")
-        if grant["wallet"] != self._sender_hex():
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} Only the recipient may claim")
-        amount = u256(int(grant["amount_atto"]))
-        if amount <= u256(0):
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} No amount owed on this grant")
-        if amount > self.reserved_atto:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} Contract balance insufficient for claim")
+            return {"id": grant_id, "already_processed": True}
+        amount = int(grant["amount_usdc"])
         grant["claimed"] = True
-        self.reserved_atto = u256(int(self.reserved_atto) - int(amount))
+        grant["claim_tx_hash"] = base_tx_hash
+        self.reserved_usdc = u256(max(0, int(self.reserved_usdc) - amount))
         self._save("grant", grant_id, grant)
         self._bump_stat("grants_claimed")
-        self._audit("claim_grant", self._sender_hex(), {"id": grant_id, "atto": str(amount)})
-        _send_gen(grant["wallet"], amount)
-        return {"id": grant_id, "claimed": True, "amount_atto": grant["amount_atto"]}
+        self._audit(
+            "mark_grant_claimed",
+            self._sender_hex(),
+            {"id": grant_id, "usdc": amount, "base_tx_hash": base_tx_hash},
+        )
+        return {"id": grant_id, "already_processed": False, "amount_usdc": grant["amount_usdc"]}
 
     # =======================================================================
     # Appeals
@@ -1426,10 +1466,10 @@ is denied. Return ONLY JSON:
             "epoch_count": int(self.epoch_count),
             "grant_count": int(self.grant_count),
             "appeal_count": int(self.appeal_count),
-            "current_epoch": self.current_epoch,
-            "treasury_atto": str(int(self.treasury_atto)),
-            "reserved_atto": str(int(self.reserved_atto)),
-            "total_granted_atto": str(int(self.total_granted_atto)),
+            "treasury_usdc": str(int(self.treasury_usdc)),
+            "reserved_usdc": str(int(self.reserved_usdc)),
+            "total_granted_usdc": str(int(self.total_granted_usdc)),
+            "relayer": self.relayer.as_hex,
         }
 
     @gl.public.view
@@ -1448,8 +1488,22 @@ is denied. Return ONLY JSON:
             "appeals_upheld",
             "appeals_denied",
             "treasury_deposits",
+            "grant_batches_relayed",
         )
         return {k: int(self.stats.get(k, u256(0))) for k in keys}
+
+    @gl.public.view
+    def get_grants_pending_relay(self, epoch_id: str) -> dict:
+        """Grants in this (closed) epoch not yet pushed to the Base
+        Sepolia escrow's setGrants() — what the relayer polls to build
+        its next relay transaction."""
+        epoch = self._load("epoch", epoch_id)
+        out = []
+        for gid in epoch["grant_ids"]:
+            g = json.loads(self.grants[gid])
+            if not g["relayed"]:
+                out.append(g)
+        return {"epoch": epoch_id, "items": out}
 
     @gl.public.view
     def is_curator(self, address: str) -> bool:
@@ -1524,7 +1578,7 @@ is denied. Return ONLY JSON:
                     "verified": d["verified"],
                     "total_score": int(d.get("total_score", 0)),
                     "funded_count": int(d.get("funded_count", 0)),
-                    "total_granted_atto": d.get("total_granted_atto", "0"),
+                    "total_granted_usdc": d.get("total_granted_usdc", "0"),
                 }
             )
         rows.sort(key=lambda r: (-r["total_score"], r["username"]))
@@ -1542,7 +1596,7 @@ is denied. Return ONLY JSON:
         out = []
         for i in range(len(self.epoch_ids)):
             out.append(json.loads(self.epochs[self.epoch_ids[i]]))
-        return {"items": out, "current": self.current_epoch}
+        return {"items": out}
 
     @gl.public.view
     def get_grant(self, grant_id: str) -> dict:

@@ -14,7 +14,7 @@ interface Contribution {
   score_total: number;
   eligible: boolean;
   evaluation_summary: string;
-  granted_atto: string;
+  granted_usdc: string;
 }
 
 interface Page {

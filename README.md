@@ -1,8 +1,8 @@
 # ImpactDNA
 
-**Retroactive Public Goods Funding on GenLayer.**
+**Retroactive Public Goods Funding on GenLayer, funded in USDC on Base Sepolia.**
 
-ImpactDNA flips the traditional grants model: instead of funding proposals before work begins, it evaluates open-source repositories *after* release and rewards the ones that became genuinely foundational. The subjective judgment — is this work original, adopted, influential? — is performed entirely by a **GenLayer Intelligent Contract**: validators independently fetch live GitHub evidence and score impact with LLM reasoning, reaching consensus before anything is recorded or funded. Grants are then paid out in **real GEN, escrowed and sent directly by the contract itself** the moment a developer claims them on-chain.
+ImpactDNA flips the traditional grants model: instead of funding proposals before work begins, it evaluates open-source repositories *after* release and rewards the ones that became genuinely foundational. The subjective judgment — is this work original, adopted, influential? — is performed entirely by a **GenLayer Intelligent Contract**: validators independently fetch live GitHub evidence and score impact with LLM reasoning, reaching consensus before anything is recorded or funded. Real money moves on **Base Sepolia**, in **USDC**, through a dedicated escrow contract; GenLayer is the authoritative ledger and a backend relayer bridges the two chains.
 
 ![Landing page](docs/screenshots/landing.png)
 
@@ -11,22 +11,34 @@ ImpactDNA flips the traditional grants model: instead of funding proposals befor
 | Component | URL / Address |
 |---|---|
 | **Web app** | [impactdna.vercel.app](https://impactdna.vercel.app) |
-| **REST API** (24/7, health-checked) | [impactdna-api-zoe.fly.dev](https://impactdna-api-zoe.fly.dev) |
-| **Intelligent Contract** | [`0x509382e2c63814aCD85ECA415251E8C1f92620F3`](https://studio.genlayer.com) — GenLayer StudioNet (gasless) |
-| **Contract owner / curator** | `0x07E130Bd4bB1dCbB97558FCcDC47F14a58d05Fa7` |
+| **REST API** (24/7, health-checked) | [impactdna-api-v2.fly.dev](https://impactdna-api-v2.fly.dev) |
+| **GenLayer Intelligent Contract** | [`0xC670690Cd75C3bD06710c85A13bAE99A2AC4faA4`](https://studio.genlayer.com) — GenLayer StudioNet (gasless) |
+| **Base Sepolia escrow** | [`0x1C588195832F87496cE797C7C28c82F532d95E4E`](https://sepolia.basescan.org) — `ImpactDnaEscrow.sol` |
+| **USDC (Base Sepolia)** | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
+| **Owner / relayer / first curator** | `0x7401c129EDfc26E68FE19309fE461eb3Db1058Eb` |
 
-Constructor: `platform_name="Impact_DNA"`, `min_eligible_score=40` (owner-adjustable from the admin panel).
+Constructor: `platform_name="Impact_DNA"`, `min_eligible_score=10` (owner-adjustable).
 
-This contract moves real GEN custody in-contract (see [Real GEN escrow](#real-gen-escrow-held-directly-in-the-contract) below), and separates *reserved* grant funds from the *available* treasury (`reserved_atto` vs `treasury_atto`) so a closed epoch's grants stay claimable no matter what later deposits or epochs do to the treasury balance — see [review.md](review.md) for the full writeup. The complete lifecycle has been exercised live end-to-end on this deployment: submit → evaluate (5-validator consensus) → open epoch → close epoch → claim, with real GEN paid out atomically on claim.
+This is a full relaunch (2026-09-13) of an earlier native-GEN, email/password version — see [Current stage & path forward](#current-stage--path-forward) for what changed and why.
 
 ## How it works
 
 ```
-Developer connects GitHub via OAuth (never a typed username — you can only
-link an account you actually control) + registers + verifies on-chain
+Anyone connects their wallet (Reown AppKit — WalletConnect, MetaMask, etc.)
+and signs a nonce to log in. No email, no password, no custodial key.
          |
          v
-Submits a repository with category + description
+Anyone opens and names a funding epoch (permissionless) --> anyone deposits
+USDC into it on the Base Sepolia escrow --> a relayer confirms the deposit
+and credits that epoch's pool on GenLayer
+         |
+         v
+Developer connects GitHub via OAuth (never a typed username — you can only
+link an account you actually control) + registers + verifies on-chain,
+signed directly by their own connected wallet
+         |
+         v
+Submits a repository with category + description, into a chosen open epoch
          |
          v
 Evaluation: leader fetches repo from GitHub, scores 5 dimensions (0-20 each)
@@ -38,14 +50,13 @@ in the same or adjacent 25-point bucket.
 Score >= gate --> eligible for funding   |   Score < gate --> rejected (appeal available once)
          |
          v
-Curator deposits real GEN directly into the contract + opens an epoch with a pool
+Epoch's opener (or any curator) closes it --> pool split deterministically
+by quadratic weight (score^2) — same formula regardless of who opened or
+funded the epoch
          |
          v
-Curator closes epoch --> pool split deterministically by quadratic weight (score^2)
-         |
-         v
-Developer claims grant on-chain --> contract sends real GEN to the developer's
-wallet in the same transaction (see Real GEN escrow below)
+Relayer pushes the settled grants to the Base Sepolia escrow --> developer
+self-claims USDC directly from the escrow with their own wallet
 ```
 
 ### Impact dimensions (0-20 each, 100 total)
@@ -82,14 +93,14 @@ Every judgment that matters happens inside the contract under multi-validator co
 
 An off-chain AI could score repositories, but there would be no way to verify that the scoring was honest, consistent, or tamper-proof. GenLayer makes every evaluation auditable and adversarially robust.
 
-## Real GEN escrow, held directly in the contract
+## USDC on Base Sepolia, bridged by a relayer
 
-Real GEN custody and payouts live entirely on-chain — no off-chain treasury wallet, no backend private key, no intermediary that could go down or be compromised independently of the contract itself:
+GenLayer's own EVM-compatibility layer can move its native GEN token, but not an ERC20 on another chain — so real USDC custody lives in `ImpactDnaEscrow.sol` on Base Sepolia, and a single backend relayer bridges the two chains (the same pattern used by this project's sibling `meme-olympics` and `Event-Weaver` builds):
 
-- `deposit_to_treasury` is `@gl.public.write.payable` — a curator's deposit is real GEN value attached to the call (`gl.message.value`, never a caller-supplied number), credited straight into the contract's own balance.
-- **Reserved vs. available funds**: `treasury_atto` is the undeployed pool available to back a new epoch; `reserved_atto` is funds already allocated to grants by a closed epoch but not yet claimed. `close_epoch` moves allocated amounts into `reserved_atto` (only the true unallocated remainder returns to `treasury_atto`), and `claim_grant` checks/debits `reserved_atto`. This means a grant's claimability never depends on what a later epoch or deposit does to the treasury — see [review.md](review.md).
-- `claim_grant` pays out directly: it marks the grant claimed and debits the reserved ledger *before* transferring — checks-effects-interactions — so a second claim call (re-entrant or repeated) finds the ledger already reduced and the grant already claimed, making double-spend structurally impossible. The transfer itself routes through a single choke point (`_send_gen`), using an EVM-interface stub (`_Recipient(...).emit_transfer(value=...)`) — the mechanism GenVM actually uses to deliver native value to a plain wallet, confirmed by a live probe on this exact pinned runner.
-- If a payout ever needs recovering (e.g. a mis-set grant amount), it's a contract-level fix, not a matter of retrying a separate off-chain transaction — there's only one source of truth for whether GEN moved.
+- **Deposits**: anyone calls `ImpactDnaEscrow.deposit(epochId, amount)` (standard ERC20 approve + deposit). The relayer scans for confirmed `Deposited` events, resolves the escrow's `bytes32` key back to a GenLayer epoch id, and calls `record_deposit(epoch_id, depositor, amount, base_tx_hash)` — idempotent on `base_tx_hash`, so a retried relay sweep can never double-count a deposit.
+- **Settlement relay**: once a curator (or the epoch's own opener) closes an epoch, the relayer reads `get_grants_pending_relay(epoch_id)` and pushes the recipient list to `ImpactDnaEscrow.setGrants(...)` — the contract rejects a second call for the same epoch, so a retry after a partial failure is always safe.
+- **Claims**: a grant recipient calls `ImpactDnaEscrow.claim(epochId)` directly with their own wallet — the escrow holds the real USDC and pays out itself; the relayer only mirrors the `Claimed` event back onto GenLayer (`mark_grant_claimed`) so the dashboard shows accurate status.
+- **No custodial keys anywhere in this path.** Deposits and claims are signed by the user's own connected wallet; only the relayer's own bridging calls (`record_deposit`, `mark_grants_relayed`, `mark_grant_claimed`) use a dedicated backend key, which must be set as the contract's `relayer` (`set_relayer`) on GenLayer and the escrow's `relayer` on Base Sepolia.
 
 ## Screenshots
 
@@ -101,43 +112,47 @@ Real GEN custody and payouts live entirely on-chain — no off-chain treasury wa
 |---|---|
 | ![Funding Explorer](docs/screenshots/funding-explorer.png) | ![Admin panel](docs/screenshots/admin-panel.png) |
 
-## Curator admin panel
+*(Screenshots predate this relaunch and still show the old email/GEN UI — refresh pending.)*
 
-A dedicated `/admin` panel (curator/admin role required) replaces manual Studio/CLI calls for day-to-day operation:
+## Epochs are permissionless
 
-- **Treasury deposit** — deposit real GEN directly into the contract in one transaction (GEN-denominated input, converted to atto client-side, no more typing 18-zero atto strings)
-- **Funding epoch** — open a round with a GEN pool size and label, or close the open epoch to settle grants
-- **Eligibility gate** (admin only) — adjust `min_eligible_score` (0–100) as the platform's repo pool matures
-- **Curator management** (admin only) — add/remove curators on-chain; owner-gated by the contract itself
+Unlike the earlier version of this project, **anyone can open and name a funding epoch, and anyone can deposit USDC into it** — there is no curator gate on opening a round or funding it. What stays curator/admin-gated:
 
-### Why epoch-opening and curator access aren't open to everyone
+- **Closing an epoch** — either that epoch's own opener, or any curator, can call `close_epoch`. This prevents a third party from prematurely settling someone else's round.
+- **Manipulation screening, appeal resolution, the eligibility gate, and curator management** — these are judgment calls about the platform's integrity, not about who gets to participate in funding, so they stay with curators/the owner (`detect_manipulation`, `resolve_appeal`, `set_min_eligible_score`, `add_curator`/`remove_curator`).
 
-`open_epoch`, `deposit_to_treasury`, and curator management are deliberately gated to the `curator`/`admin` roles, enforced both in the backend RBAC middleware and independently by the contract itself (`_require_curator`, `_require_owner`). This isn't an oversight to relax later — it's the control that keeps the treasury and funding rounds honest:
-
-- **`open_epoch` controls real money.** A pool size is backed by real GEN held directly in the contract. If any registered user could open epochs, nothing would stop someone from opening a round timed to their own pending submission, or spamming epochs to lock out a legitimate one.
-- **`deposit_to_treasury` moves real funds into the contract.** It's a `payable` call — the deposited amount comes from the transaction's own value, not a claimed number, so it can't be faked. But it's still curator-gated: letting anyone call it would let anyone dictate when and how much enters the funding pool, which is a funding-round-integrity problem even though the amount itself can't be lied about.
-- **Curator management is owner-gated for the same reason ownership matters anywhere:** it's the one power that can't be sandboxed. Adding a curator is adding someone who can move real funds; the contract enforces this at the code level (`add_curator`/`remove_curator` both call `_require_owner()`), so even a compromised backend account can't grant itself curator status without the actual owner key.
-- **This is a permissions problem, not a UX problem.** Anyone can register, verify their GitHub identity, submit contributions, and claim grants they're eligible for — that's the entire user-facing surface, and it's fully open. Curator power is scoped narrowly on purpose, the same way a bank doesn't let every account holder approve wire transfers just because the UI would be simpler that way.
-
-In short: opening this up would trade a small amount of curator friction for a large, unrecoverable trust hole. The mitigation isn't removing the gate — it's making the gate cheap to operate (which is what the `/admin` panel is for) and adding more independent curators over time, rather than concentrating or eliminating the role.
+The sharing formula itself (`pool * score^2 / sum(score^2)`) is identical no matter who opened or funded the epoch — permissionless funding didn't require any change to how grants are computed.
 
 ## Repository layout
 
 ```
-contracts/impact_dna.py    Intelligent Contract (1,500+ lines, genvm-lint clean,
-                           pinned runner hash)
-contracts/tests/           Unit tests (fake genlayer runtime stub) covering the
-                           full deposit-to-claim lifecycle
+contracts/impact_dna.py    GenLayer Intelligent Contract — ledger, evaluation,
+                           permissionless epochs, relayer-only USDC bridging
+contracts/base/            ImpactDnaEscrow.sol (Base Sepolia USDC vault) +
+                           deploy.js
+contracts/tests/           Unit tests (fake genlayer runtime stub) covering
+                           the full open-epoch -> deposit -> submit -> evaluate
+                           -> close -> relay -> claim lifecycle
 backend/                   Node 20 + TypeScript + Express (Fly.io, 24/7)
-  src/routes/               Auth (incl. GitHub OAuth), contributions, platform,
-                            admin (curator/treasury/eligibility ops)
-  src/lib/                  GenLayer client, wallet encryption, GitHub OAuth,
-                            email, Redis, logger
+  src/routes/               Wallet-connect auth (nonce/verify), contributions
+                            (mirror sync), platform (reads), admin
+                            (curator/operator-signed ops)
+  src/services/             baseSepolia.ts (escrow contract client),
+                            genlayerRelay.ts (relayer-signed GenLayer writes)
+  src/jobs/relay.ts          Scans Base Sepolia deposits/claims, relays
+                            settled grants — Redis-locked against overlap
+  src/lib/                  GenLayer client, SIWE-style nonce/signature auth,
+                            GitHub OAuth, email, Redis, logger
   src/middleware/           JWT auth, rate limiting, error handling
   migrations/                Forward-only SQL migrations (run at boot)
 frontend/                  Next.js 14 + Tailwind CSS (Vercel)
+  lib/wallet.ts              Reown AppKit + wagmi config (Base Sepolia)
+  lib/genlayerClient.ts      Client-side GenLayer writes, signed by the
+                            connected wallet via genlayer-js's EIP-1193 provider
+  lib/escrowClient.ts        Client-side USDC approve/deposit/claim (wagmi)
   app/                      Landing, dashboard, explorer, contribution detail,
-                            funding, developers, docs, auth pages, admin panel
+                            funding (open/deposit/claim), developers, docs,
+                            login (wallet-connect), admin panel
   components/               Glassmorphism UI kit, nav, footer, auth shell
 docs/                       ARCHITECTURE.md, DEPLOYMENT.md, API.md, screenshots/
 .github/workflows/ci.yml   Contract lint + backend & frontend builds
@@ -148,26 +163,25 @@ docker-compose.yml         Local PostgreSQL (port 5439)
 
 | Layer | Technology |
 |---|---|
-| Intelligent Contract | Python, GenLayer VM, `gl.vm.run_nondet_unsafe`, pinned runner |
+| GenLayer contract | Python, GenLayer VM, `gl.vm.run_nondet_unsafe`, pinned runner |
+| Base Sepolia contract | Solidity 0.8.24, no external deps (`contracts/base/ImpactDnaEscrow.sol`) |
 | Backend | Node.js 20, TypeScript, Express, PostgreSQL, Upstash Redis, Brevo |
 | Frontend | Next.js 14, React 18, Tailwind CSS, TypeScript |
+| Wallet / chain | Reown AppKit, wagmi, viem, genlayer-js, ethers.js |
 | Infrastructure | Fly.io (24/7), Vercel, Docker, GitHub Actions CI |
-| Crypto | ethers.js (custodial wallet generation), AES-256-GCM (key encryption), bcrypt(12) |
-| Chain interaction | genlayer-js SDK |
-| Identity | GitHub OAuth 2.0 (signed, short-lived state JWT — no typed usernames) |
+| Identity | Wallet-connect (SIWE-style nonce/signature) + GitHub OAuth 2.0 for developer verification |
 | Email | Brevo transactional HTTP API, every send logged to `notification_log` |
 
 ## Platform features
 
+- **Wallet-connect identity** — sign in with any wallet via Reown AppKit (WalletConnect, MetaMask, Trust Wallet, Binance Wallet, ...). No email, no password, no custodial key ever held by the backend. A short-lived signed nonce (`GET /api/auth/nonce`, `POST /api/auth/verify`) proves wallet ownership and issues the session JWT.
 - **GitHub OAuth developer identity** — users connect via OAuth (never a typed username), so an account can only be linked by someone who actually controls it; `github_id` is uniquely constrained so one GitHub account can't be linked to multiple ImpactDNA accounts.
-- **Email + password auth** with JWT access tokens (15-min) and rotating refresh tokens (7-day). Brevo-powered password reset with 30-minute one-time tokens.
-- **Permanent custodial wallets**: generated at signup with ethers, AES-256-GCM encrypted at rest. Address never changes, survives device/browser resets. Private-key export requires password re-confirmation. StudioNet is gasless, so users transact without holding tokens.
-- **Real GEN escrow and payouts**: held directly in the contract, paid out atomically on claim — see [Real GEN escrow](#real-gen-escrow-held-directly-in-the-contract) above.
-- **Transactional email** via Brevo HTTP API: welcome, password reset, submission confirmation, evaluation results, grant claimed — every send (success or failure) logged to `notification_log`.
-- **Conservative Redis usage** (Upstash, billed per command): single lazy connection, in-process micro-cache (Map, max 500 entries) in front of every read, TTL on all keys, fixed-window rate limiter costing 1-2 commands per hit, graceful degradation to in-memory if Redis is unreachable. Curator/treasury writes explicitly invalidate the cached platform-info read so the admin panel never shows stale state after an action.
-- **24/7 backend**: Fly.io with `auto_stop_machines="off"`, `min_machines_running=1`, restart policy `always`, `/health` endpoint checked every 30 seconds, externally monitored via UptimeRobot.
+- **Client-side signing for every user action** — register/verify/submit/evaluate/appeal/open_epoch/close_epoch are all signed directly by the connected wallet (`genlayer-js` with an EIP-1193 provider). The backend never proxies a user's key.
+- **Permissionless, USDC-funded epochs** — anyone opens and names a round, anyone deposits USDC into it on Base Sepolia; a relayer bridges deposits and settled grants between chains (see above).
+- **Conservative Redis usage** (Upstash, billed per command): single lazy connection, in-process micro-cache (Map, max 500 entries) in front of every read, TTL on all keys, fixed-window rate limiter costing 1-2 commands per hit, graceful degradation to in-memory if Redis is unreachable, and a distributed relay lock so multiple Fly machines never double-relay.
+- **24/7 backend**: Fly.io with `auto_stop_machines="off"`, `min_machines_running=1`, restart policy `always`, `/health` endpoint checked every 30 seconds.
 - **Self-healing mirror**: the dashboard reads a local Postgres mirror table that automatically reconciles with authoritative on-chain records when stale data is detected.
-- **Security**: helmet, strict CORS allowlist, Zod validation on every input, bcrypt(12), RBAC (developer/curator/admin), audit logging on-chain and in Postgres, secret-redacting structured logs (pino), fail-fast environment validation.
+- **Security**: helmet, strict CORS allowlist, Zod validation on every input, single-use signed nonces for login, RBAC (developer/curator/admin) for the narrow set of operator actions, audit logging on-chain and in Postgres, secret-redacting structured logs (pino), fail-fast environment validation.
 
 ## Quick start (local)
 
@@ -175,54 +189,60 @@ docker-compose.yml         Local PostgreSQL (port 5439)
 git clone https://github.com/zoefunds/ImpactDNA.git && cd ImpactDNA
 docker compose up -d                          # PostgreSQL on :5439
 cd backend && cp .env.example .env            # fill in secrets
-npm install && npm run build && npm start     # API on :8080
-cd ../frontend && npm install && npm run dev  # web on :3000
+npm install && npm run dev                    # API on :8080
+cd ../frontend && cp .env.example .env.local  # fill in NEXT_PUBLIC_* vars
+npm install && npm run dev                    # web on :3000
 ```
 
-## Operating a funding round (curator)
+The backend's dev script loads `.env` itself (see `src/config.ts`) — no extra tooling needed even on older Node versions without `--env-file` support.
 
-The recommended path is the **`/admin` panel** (see [screenshots](#screenshots) above) — deposit GEN, open/close epochs, and adjust the eligibility gate without leaving the app. The same operations are available directly against the contract for scripted or emergency use:
+## Operating a funding round
+
+Opening and funding an epoch is now open to anyone via the **`/funding` page** — no admin access required. Curators still handle the narrower operator actions from **`/admin`**:
+
+- **Close an epoch** — settles grants deterministically; available to that epoch's own opener too, not just curators
+- **Manipulation screen** (`detect_manipulation`) and **appeal resolution** (`resolve_appeal`)
+- **Eligibility gate** (admin only) — adjust `min_eligible_score` (0–100)
+- **Curator management** (admin only) — add/remove curators on-chain; owner-gated by the contract itself
+
+The same operations are available directly against the contract for scripted or emergency use:
 
 ```bash
-# deposit_to_treasury is payable — the deposit is the real GEN value attached
-# to the call, not a calldata arg. The genlayer CLI's `write` command doesn't
-# expose a --value flag, so deposit from Studio's UI (which has a value field)
-# or the /admin panel; use the CLI for everything else below.
+# Open a permissionless epoch (any wallet)
+genlayer write 0xC670…4aA4 open_epoch --args "Season 1"
 
-# Open an epoch with a 50 GEN pool
-genlayer write 0x5093…20F3 open_epoch --args 50000000000000000000 "Season 1"
+# Anyone deposits USDC into it on Base Sepolia (ImpactDnaEscrow.deposit),
+# which the relayer picks up and credits to the epoch automatically.
 
-# Developers submit and evaluate during the epoch...
+# Close epoch — deterministic quadratic settlement (opener or curator)
+genlayer write 0xC670…4aA4 close_epoch --args e-1
 
-# Close epoch — deterministic quadratic settlement
-genlayer write 0x5093…20F3 close_epoch
-
-# Resolve any open appeals / run a manipulation screen
-genlayer write 0x5093…20F3 resolve_appeal --args a-1
-genlayer write 0x5093…20F3 detect_manipulation --args c-1
+# Resolve any open appeals / run a manipulation screen (curator)
+genlayer write 0xC670…4aA4 resolve_appeal --args a-1
+genlayer write 0xC670…4aA4 detect_manipulation --args c-1
 
 # Adjust the eligibility gate (owner only)
-genlayer write 0x5093…20F3 set_min_eligible_score --args 40
+genlayer write 0xC670…4aA4 set_min_eligible_score --args 40
 ```
 
 ## Current stage & path forward
 
-ImpactDNA is live on GenLayer StudioNet with the full lifecycle working end-to-end — submit, evaluate, open/close two epochs, and claim — including real GEN payouts (3 contributions funded and claimed to date). Adoption so far is deliberately small: two curators, one verified developer account. That's a testnet dogfooding stage, not a live community yet, and worth being upfront about.
+ImpactDNA was fully relaunched on 2026-09-13: the earlier email/password + custodial-wallet + native-GEN version was replaced end-to-end with wallet-connect identity and USDC funding on Base Sepolia, and permissionless epochs replaced curator-only funding rounds. All prior user/contribution data was intentionally erased as part of this relaunch — this is a fresh start, not a migration.
 
 Concrete next steps:
 
-- **Onboard real external developers.** The GitHub OAuth + evaluation pipeline is ready for anyone to connect their own account and submit a real shipped repo — the next milestone is getting the first cohort of unaffiliated maintainers through it.
-- **Recruit additional curators.** Right now one wallet holds owner + curator power. The contract and admin panel already support adding independent curators (`add_curator`); spreading that role out is a trust improvement, not just a feature.
-- **Mainnet deployment.** StudioNet is gasless and free to experiment on; moving to a live GenLayer network is the natural next step once a funding round has run with real external contributions.
-- **Recurring funding rounds.** The quadratic-settlement math has been reasoned through and unit-verified but only exercised live with a single eligible contribution per epoch so far — a real round with multiple competing developers is the next proof point.
-- **Community treasury funding.** Today the treasury is funded manually by the curator; a natural evolution is accepting deposits from anyone who wants to back a round, not just the platform operator.
+- **Onboard real external developers and funders.** Both the developer-verification pipeline and the now-permissionless funding side are ready for anyone to use directly — the next milestone is getting real, unaffiliated participants through both paths.
+- **Recruit additional curators.** One wallet currently holds owner + first-curator + relayer power. The contract and admin panel already support adding independent curators (`add_curator`); spreading that role out (and moving the relayer to its own dedicated key) is a trust improvement, not just a feature.
+- **Rotate the relayer/operator key.** The current key was shared in a development chat session and should be treated as already compromised for anything beyond testnet — generate and wire in a fresh one before any real value passes through the escrow.
+- **Mainnet / Base deployment.** Both StudioNet and Base Sepolia are testnets; moving to live networks is the natural next step once a funding round has run with real external participants.
+- **Recurring, concurrent funding rounds.** The quadratic-settlement math is unit-verified and now supports multiple simultaneously-open epochs by construction — a real round with several concurrently open, differently-funded epochs is the next proof point.
 
 ## Documentation
 
 - [Architecture](docs/ARCHITECTURE.md) — system design, data flow, consensus model
-- [Deployment](docs/DEPLOYMENT.md) — step-by-step for contract, Fly.io, Vercel
+- [Deployment](docs/DEPLOYMENT.md) — step-by-step for contracts, Fly.io, Vercel
 - [API Reference](docs/API.md) — all endpoints, auth, request/response schemas
-- [review.md](review.md) — reserved-vs-treasury and score-consistency fix, with tests
+- [review.md](review.md) — reserved-vs-treasury and score-consistency fix, with tests (pre-relaunch)
 
 ## License
 

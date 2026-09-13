@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { query } from "../db.js";
 import { contractWrite, contractRead, invalidateRead } from "../lib/genlayer.js";
-import { revealPrivateKey } from "../lib/wallet.js";
+import { config } from "../config.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
 import { rateLimit } from "../middleware/rateLimit.js";
 import { wrap, validateBody, HttpError } from "../middleware/errors.js";
@@ -10,65 +10,34 @@ import { wrap, validateBody, HttpError } from "../middleware/errors.js";
 /**
  * Curator/admin operations (RBAC enforced here AND on-chain — the
  * contract independently checks curator status of the signing wallet).
+ * These stay backend-signed by one operator key (GENLAYER_OPERATOR_PRIVATE_KEY)
+ * — rare, trusted-operator actions, unlike per-user writes which are now
+ * signed client-side by the user's own connected wallet.
  */
 export const adminRouter = Router();
 
 adminRouter.use(requireAuth, requireRole("curator", "admin"));
 
-async function adminKey(userId: string): Promise<string> {
-  const found = await query("SELECT wallet_ciphertext FROM users WHERE id = $1", [userId]);
-  if (!found.rowCount) throw new HttpError(404, "User not found");
-  return revealPrivateKey(String(found.rows[0].wallet_ciphertext));
+function operatorKey(): string {
+  if (!config.GENLAYER_OPERATOR_PRIVATE_KEY) {
+    throw new HttpError(503, "GENLAYER_OPERATOR_PRIVATE_KEY is not configured");
+  }
+  return config.GENLAYER_OPERATOR_PRIVATE_KEY;
 }
 
-adminRouter.post(
-  "/epochs/open",
-  rateLimit("admin-epoch", 10, 3600),
-  validateBody(z.object({ poolAtto: z.string().regex(/^\d+$/), label: z.string().trim().min(1).max(80) })),
-  wrap(async (req, res) => {
-    const { poolAtto, label } = req.body as { poolAtto: string; label: string };
-    const key = await adminKey(req.user!.id);
-    const tx = await contractWrite(key, "open_epoch", [BigInt(poolAtto), label]);
-    await invalidateRead("get_platform_info");
-    res.json({ ok: true, tx });
-  }),
-);
-
-adminRouter.post(
-  "/epochs/close",
-  rateLimit("admin-epoch", 10, 3600),
-  wrap(async (req, res) => {
-    const key = await adminKey(req.user!.id);
-    const tx = await contractWrite(key, "close_epoch", []);
-    await invalidateRead("get_platform_info");
-    res.json({ ok: true, tx });
-  }),
-);
-
-// -------------------------------------------------------- treasury (real GEN, held in-contract)
-adminRouter.post(
-  "/treasury/deposit",
-  rateLimit("admin-treasury", 10, 3600),
-  validateBody(z.object({ atto: z.string().regex(/^\d+$/) })),
-  wrap(async (req, res) => {
-    const key = await adminKey(req.user!.id);
-    const atto = BigInt((req.body as { atto: string }).atto);
-    // deposit_to_treasury is payable — the deposit amount is the real GEN
-    // value attached to this call (gl.message.value), not a calldata arg.
-    const tx = await contractWrite(key, "deposit_to_treasury", [], atto);
-    await invalidateRead("get_platform_info");
-    res.json({ ok: true, tx });
-  }),
-);
+// Note: open_epoch/close_epoch are NOT here — epochs are permissionless
+// (anyone may open and name one, and either its own opener or a curator
+// may close it), so those calls are signed client-side by the acting
+// user's own connected wallet (frontend/lib/genlayerClient.ts), not
+// proxied through this operator-gated router.
 
 adminRouter.post(
   "/contributions/:id/detect-manipulation",
   rateLimit("admin-fraud", 10, 3600),
   wrap(async (req, res) => {
-    const key = await adminKey(req.user!.id);
     res.json({
       ok: true,
-      tx: await contractWrite(key, "detect_manipulation", [String(req.params.id)]),
+      tx: await contractWrite(operatorKey(), "detect_manipulation", [String(req.params.id)]),
     });
   }),
 );
@@ -77,8 +46,7 @@ adminRouter.post(
   "/appeals/:id/resolve",
   rateLimit("admin-appeal", 10, 3600),
   wrap(async (req, res) => {
-    const key = await adminKey(req.user!.id);
-    res.json({ ok: true, tx: await contractWrite(key, "resolve_appeal", [String(req.params.id)]) });
+    res.json({ ok: true, tx: await contractWrite(operatorKey(), "resolve_appeal", [String(req.params.id)]) });
   }),
 );
 
@@ -89,7 +57,7 @@ adminRouter.post(
   wrap(async (req, res) => {
     const { role } = req.body as { role: string };
     const updated = await query(
-      "UPDATE users SET role = $1, updated_at = now() WHERE id = $2 RETURNING id, email, role",
+      "UPDATE users SET role = $1, updated_at = now() WHERE id = $2 RETURNING id, wallet_address, role",
       [role, String(req.params.id)],
     );
     if (!updated.rowCount) throw new HttpError(404, "User not found");
@@ -105,8 +73,7 @@ adminRouter.post(
   validateBody(z.object({ address: z.string().trim().min(10).max(64) })),
   wrap(async (req, res) => {
     const { address } = req.body as { address: string };
-    const key = await adminKey(req.user!.id);
-    const tx = await contractWrite(key, "add_curator", [address]);
+    const tx = await contractWrite(operatorKey(), "add_curator", [address]);
     await invalidateRead("get_platform_info");
     res.json({ ok: true, tx });
   }),
@@ -117,8 +84,7 @@ adminRouter.delete(
   requireRole("admin"),
   rateLimit("admin-curators", 10, 3600),
   wrap(async (req, res) => {
-    const key = await adminKey(req.user!.id);
-    const tx = await contractWrite(key, "remove_curator", [String(req.params.address)]);
+    const tx = await contractWrite(operatorKey(), "remove_curator", [String(req.params.address)]);
     await invalidateRead("get_platform_info");
     res.json({ ok: true, tx });
   }),
@@ -139,8 +105,7 @@ adminRouter.post(
   validateBody(z.object({ score: z.number().int().min(0).max(100) })),
   wrap(async (req, res) => {
     const { score } = req.body as { score: number };
-    const key = await adminKey(req.user!.id);
-    const tx = await contractWrite(key, "set_min_eligible_score", [score]);
+    const tx = await contractWrite(operatorKey(), "set_min_eligible_score", [score]);
     await invalidateRead("get_platform_info");
     res.json({ ok: true, tx });
   }),

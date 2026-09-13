@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { GlassCard, ScoreBar, Spinner, ErrorNote } from "@/components/ui";
-import { api, formatGen } from "@/lib/api";
+import { api, formatUsdc } from "@/lib/api";
 
 interface Dev {
   username: string;
@@ -10,7 +10,7 @@ interface Dev {
   verified: boolean;
   total_score: number;
   funded_count: number;
-  total_granted_atto: string;
+  total_granted_usdc: string;
 }
 
 export default function Developers() {
@@ -73,7 +73,7 @@ export default function Developers() {
                   </div>
                   <div>
                     <span className="label-caps text-on-variant block">Earned</span>
-                    <span className="text-green text-lg">{formatGen(d.total_granted_atto)} GEN</span>
+                    <span className="text-green text-lg">{formatUsdc(d.total_granted_usdc)} USDC</span>
                   </div>
                 </div>
               </GlassCard>

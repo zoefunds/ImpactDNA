@@ -2,8 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
+import Link from "next/link";
 import { GlassCard, DimensionBar, StatusChip, Spinner, ErrorNote } from "@/components/ui";
-import { api, getToken, formatGen } from "@/lib/api";
+import { api, getToken, formatUsdc } from "@/lib/api";
+import { genlayerWrite } from "@/lib/genlayerClient";
 
 interface Contribution {
   id: string;
@@ -21,7 +23,7 @@ interface Contribution {
   evaluation_summary: string;
   manipulation_summary: string;
   evidence: Record<string, unknown>;
-  granted_atto: string;
+  granted_usdc: string;
 }
 
 const DIM_LABELS: Record<string, string> = {
@@ -41,6 +43,7 @@ export default function EvaluationReport() {
   const [appealReason, setAppealReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
+  const [appealFiled, setAppealFiled] = useState(false);
 
   useEffect(() => {
     api<Contribution>(`/api/platform/contributions/${id}`, { auth: false })
@@ -52,7 +55,8 @@ export default function EvaluationReport() {
     setBusy(true);
     setError("");
     try {
-      await api(`/api/contributions/${id}/appeal`, { method: "POST", body: { reason: appealReason } });
+      await genlayerWrite("request_appeal", [id, appealReason]);
+      setAppealFiled(true);
       setNotice("Appeal filed on-chain — a curator will trigger independent re-review.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Appeal failed");
@@ -88,6 +92,11 @@ export default function EvaluationReport() {
             <div>
               <p className="label-caps text-on-variant">Category</p>
               <p className="font-mono">{c.category}</p>
+            </div>
+            <div className="h-10 w-px bg-outline-variant/30 hidden md:block" />
+            <div>
+              <p className="label-caps text-on-variant">Epoch</p>
+              <Link href={`/funding`} className="font-mono text-cyan-dim hover:underline">{c.epoch || "—"}</Link>
             </div>
           </div>
         </div>
@@ -176,21 +185,25 @@ export default function EvaluationReport() {
                 <div>
                   <p className="label-caps text-on-variant">Allocation</p>
                   <p className="font-mono text-lg">
-                    {formatGen(c.granted_atto)} <span className="text-primary text-sm">GEN</span>
+                    {formatUsdc(c.granted_usdc)} <span className="text-primary text-sm">USDC</span>
                   </p>
                 </div>
                 <span className="text-green text-2xl">✓</span>
               </div>
             )}
             {(c.status === "rejected" || c.status === "flagged") && getToken() && (
-              <div className="space-y-3 mt-2">
-                <textarea className="input-field min-h-[80px]"
-                  placeholder="Appeal reason (min 20 chars) — cite evidence the evaluation missed"
-                  value={appealReason} onChange={(e) => setAppealReason(e.target.value)} />
-                <button className="btn-ghost w-full" disabled={busy || appealReason.length < 20} onClick={appeal}>
-                  {busy ? "Filing appeal…" : "File on-chain appeal"}
-                </button>
-              </div>
+              appealFiled ? (
+                <p className="mt-2 font-mono text-xs text-green">✓ Appeal filed — awaiting curator review.</p>
+              ) : (
+                <div className="space-y-3 mt-2">
+                  <textarea className="input-field min-h-[80px]"
+                    placeholder="Appeal reason (min 20 chars) — cite evidence the evaluation missed"
+                    value={appealReason} onChange={(e) => setAppealReason(e.target.value)} />
+                  <button className="btn-ghost w-full" disabled={busy || appealReason.length < 20} onClick={appeal}>
+                    {busy ? "Filing appeal…" : "File on-chain appeal"}
+                  </button>
+                </div>
+              )
             )}
           </GlassCard>
         </section>

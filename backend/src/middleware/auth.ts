@@ -4,7 +4,7 @@ import { config } from "../config.js";
 
 export interface AuthUser {
   id: string;
-  email: string;
+  walletAddress: string;
   role: "developer" | "curator" | "admin";
 }
 
@@ -15,10 +15,14 @@ declare module "express-serve-static-core" {
 }
 
 export function signAccessToken(user: AuthUser): string {
-  return jwt.sign({ sub: user.id, email: user.email, role: user.role }, config.JWT_SECRET, {
-    expiresIn: config.ACCESS_TOKEN_TTL as jwt.SignOptions["expiresIn"],
-    issuer: "impactdna",
-  });
+  return jwt.sign(
+    { sub: user.id, walletAddress: user.walletAddress, role: user.role },
+    config.JWT_SECRET,
+    {
+      expiresIn: config.ACCESS_TOKEN_TTL as jwt.SignOptions["expiresIn"],
+      issuer: "impactdna",
+    },
+  );
 }
 
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
@@ -32,7 +36,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
     const payload = jwt.verify(token, config.JWT_SECRET, { issuer: "impactdna" }) as jwt.JwtPayload;
     req.user = {
       id: String(payload.sub),
-      email: String(payload.email),
+      walletAddress: String(payload.walletAddress),
       role: (payload.role as AuthUser["role"]) ?? "developer",
     };
     next();

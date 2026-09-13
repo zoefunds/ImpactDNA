@@ -11,7 +11,7 @@ interface PlatformInfo {
     developer_count: number;
     contribution_count: number;
     grant_count: number;
-    total_granted_atto: string;
+    total_granted_usdc: string;
   };
 }
 
@@ -219,7 +219,7 @@ export default function Landing() {
               consensus judge your work&apos;s real impact.
             </p>
             <div className="flex flex-wrap justify-center gap-4">
-              <Link href="/register" className="btn-primary text-lg px-10 py-4">
+              <Link href="/login" className="btn-primary text-lg px-10 py-4">
                 Create your account
               </Link>
               <Link href="/docs" className="btn-ghost text-lg px-10 py-4">

@@ -1,12 +1,10 @@
 import { Router } from "express";
 import jwt from "jsonwebtoken";
-import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { query } from "../db.js";
 import { config } from "../config.js";
-import { createWallet } from "../lib/wallet.js";
 import { sha256Hex, randomToken } from "../lib/crypto.js";
-import { sendEmail, welcomeEmail, resetEmail } from "../lib/email.js";
+import { issueNonce, verifyWalletSignature, normalizeAddress, buildSignMessage } from "../lib/siwe.js";
 import { signAccessToken, requireAuth } from "../middleware/auth.js";
 import { rateLimit } from "../middleware/rateLimit.js";
 import { wrap, validateBody, HttpError } from "../middleware/errors.js";
@@ -21,12 +19,7 @@ import {
 
 export const authRouter = Router();
 
-const PASSWORD_RULES = z
-  .string()
-  .min(10, "at least 10 characters")
-  .regex(/[a-z]/, "needs a lowercase letter")
-  .regex(/[A-Z]/, "needs an uppercase letter")
-  .regex(/[0-9]/, "needs a digit");
+const ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
 
 async function audit(userId: string | null, action: string, ip: string | undefined, detail: object) {
   await query(
@@ -48,81 +41,77 @@ async function issueRefreshToken(userId: string): Promise<string> {
 function publicUser(row: Record<string, unknown>) {
   return {
     id: row.id,
-    email: row.email,
+    walletAddress: row.wallet_address,
     displayName: row.display_name,
+    email: row.email,
     githubUsername: row.github_username,
     role: row.role,
-    walletAddress: row.wallet_address,
-    emailVerified: row.email_verified,
     createdAt: row.created_at,
   };
 }
 
-// ---------------------------------------------------------------- register
-authRouter.post(
-  "/register",
-  rateLimit("register", 10, 3600),
-  validateBody(
-    z.object({
-      email: z.string().email().max(254),
-      password: PASSWORD_RULES,
-      displayName: z.string().trim().min(2).max(60),
-    }),
-  ),
+// -------------------------------------------------------------- nonce
+// Step 1 of wallet-connect login: get a fresh single-use nonce to sign.
+authRouter.get(
+  "/nonce",
+  rateLimit("auth-nonce", 30, 900),
   wrap(async (req, res) => {
-    const { email, password, displayName } = req.body as {
-      email: string;
-      password: string;
-      displayName: string;
-    };
-    const existing = await query("SELECT 1 FROM users WHERE lower(email) = lower($1)", [email]);
-    if (existing.rowCount) throw new HttpError(409, "An account with this email already exists");
-
-    const passwordHash = await bcrypt.hash(password, 12);
-    const wallet = createWallet();
-    const inserted = await query(
-      `INSERT INTO users (email, password_hash, display_name, wallet_address, wallet_ciphertext)
-       VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-      [email.toLowerCase(), passwordHash, displayName, wallet.address, wallet.ciphertext],
-    );
-    const user = inserted.rows[0];
-    await audit(String(user.id), "register", req.ip, { email: email.toLowerCase() });
-
-    const mail = welcomeEmail(displayName, wallet.address);
-    void sendEmail({ to: email, ...mail, kind: "welcome", userId: String(user.id) });
-
-    const accessToken = signAccessToken({
-      id: String(user.id),
-      email: String(user.email),
-      role: user.role as "developer",
-    });
-    const refreshToken = await issueRefreshToken(String(user.id));
-    res.status(201).json({ user: publicUser(user), accessToken, refreshToken });
+    const address = String(req.query.address ?? "");
+    if (!ADDRESS_RE.test(address)) throw new HttpError(400, "Invalid wallet address");
+    const nonce = await issueNonce(address);
+    res.json({ nonce, message: buildSignMessage(address, nonce) });
   }),
 );
 
-// ------------------------------------------------------------------- login
+// ------------------------------------------------------------------- verify
+// Step 2: the wallet signs the message from /nonce; verifying it both
+// authenticates and (on first sight of this address) registers the
+// account — there is no separate register step for wallet-connect.
 authRouter.post(
-  "/login",
-  rateLimit("login", 15, 900),
-  validateBody(z.object({ email: z.string().email(), password: z.string().min(1).max(200) })),
+  "/verify",
+  rateLimit("auth-verify", 30, 900),
+  validateBody(
+    z.object({
+      address: z.string().regex(ADDRESS_RE),
+      message: z.string().min(10).max(2000),
+      signature: z.string().min(10).max(1000),
+      displayName: z.string().trim().min(0).max(60).optional(),
+    }),
+  ),
   wrap(async (req, res) => {
-    const { email, password } = req.body as { email: string; password: string };
-    const found = await query("SELECT * FROM users WHERE lower(email) = lower($1)", [email]);
-    const user = found.rows[0];
-    const ok = user && (await bcrypt.compare(password, String(user.password_hash)));
+    const { address, message, signature, displayName } = req.body as {
+      address: string;
+      message: string;
+      signature: string;
+      displayName?: string;
+    };
+    const ok = await verifyWalletSignature(address, message, signature);
     if (!ok) {
-      await audit(user ? String(user.id) : null, "login_failed", req.ip, {});
-      throw new HttpError(401, "Invalid email or password");
+      await audit(null, "wallet_verify_failed", req.ip, { address });
+      throw new HttpError(401, "Signature verification failed");
     }
-    await audit(String(user.id), "login", req.ip, {});
+
+    const normalized = normalizeAddress(address);
+    let found = await query("SELECT * FROM users WHERE lower(wallet_address) = $1", [normalized]);
+    let user = found.rows[0];
+    let created = false;
+    if (!user) {
+      const inserted = await query(
+        `INSERT INTO users (wallet_address, display_name) VALUES ($1, $2) RETURNING *`,
+        [normalized, (displayName || `${normalized.slice(0, 6)}...${normalized.slice(-4)}`).slice(0, 60)],
+      );
+      user = inserted.rows[0];
+      created = true;
+    }
+    await audit(String(user.id), created ? "wallet_register" : "wallet_login", req.ip, { address: normalized });
+
     const accessToken = signAccessToken({
       id: String(user.id),
-      email: String(user.email),
+      walletAddress: String(user.wallet_address),
       role: user.role as "developer",
     });
     const refreshToken = await issueRefreshToken(String(user.id));
-    res.json({ user: publicUser(user), accessToken, refreshToken });
+    res.status(created ? 201 : 200).json({ user: publicUser(user), accessToken, refreshToken });
   }),
 );
 
@@ -134,7 +123,7 @@ authRouter.post(
   wrap(async (req, res) => {
     const { refreshToken } = req.body as { refreshToken: string };
     const found = await query(
-      `SELECT rt.*, u.email, u.role FROM refresh_tokens rt
+      `SELECT rt.*, u.wallet_address, u.role FROM refresh_tokens rt
        JOIN users u ON u.id = rt.user_id
        WHERE rt.token_hash = $1 AND NOT rt.revoked AND rt.expires_at > now()`,
       [sha256Hex(refreshToken)],
@@ -145,7 +134,7 @@ authRouter.post(
     await query("UPDATE refresh_tokens SET revoked = TRUE WHERE id = $1", [row.id]);
     const accessToken = signAccessToken({
       id: String(row.user_id),
-      email: String(row.email),
+      walletAddress: String(row.wallet_address),
       role: row.role as "developer",
     });
     const newRefresh = await issueRefreshToken(String(row.user_id));
@@ -163,61 +152,10 @@ authRouter.post(
   }),
 );
 
-// ---------------------------------------------------------- forgot password
-authRouter.post(
-  "/forgot-password",
-  rateLimit("forgot", 5, 3600),
-  validateBody(z.object({ email: z.string().email() })),
-  wrap(async (req, res) => {
-    const { email } = req.body as { email: string };
-    const found = await query("SELECT id, email FROM users WHERE lower(email) = lower($1)", [email]);
-    const user = found.rows[0];
-    // Uniform response — do not leak account existence.
-    if (user) {
-      const token = randomToken(32);
-      await query(
-        `INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
-         VALUES ($1, $2, now() + interval '30 minutes')`,
-        [user.id, sha256Hex(token)],
-      );
-      const url = `${config.FRONTEND_URL}/reset-password?token=${token}`;
-      const mail = resetEmail(url);
-      void sendEmail({ to: String(user.email), ...mail, kind: "password_reset", userId: String(user.id) });
-      await audit(String(user.id), "forgot_password", req.ip, {});
-    }
-    res.json({ ok: true, message: "If that email exists, a reset link has been sent." });
-  }),
-);
-
-// ----------------------------------------------------------- reset password
-authRouter.post(
-  "/reset-password",
-  rateLimit("reset", 10, 3600),
-  validateBody(z.object({ token: z.string().min(20).max(200), password: PASSWORD_RULES })),
-  wrap(async (req, res) => {
-    const { token, password } = req.body as { token: string; password: string };
-    const found = await query(
-      `SELECT * FROM password_reset_tokens
-       WHERE token_hash = $1 AND NOT used AND expires_at > now()`,
-      [sha256Hex(token)],
-    );
-    const row = found.rows[0];
-    if (!row) throw new HttpError(400, "Reset link is invalid or has expired");
-    const passwordHash = await bcrypt.hash(password, 12);
-    await query("UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2", [
-      passwordHash,
-      row.user_id,
-    ]);
-    await query("UPDATE password_reset_tokens SET used = TRUE WHERE id = $1", [row.id]);
-    await query("UPDATE refresh_tokens SET revoked = TRUE WHERE user_id = $1", [row.user_id]);
-    await audit(String(row.user_id), "reset_password", req.ip, {});
-    res.json({ ok: true });
-  }),
-);
-
 // ---------------------------------------------------------- github oauth
 // Replaces free-text GitHub username entry: a user can only link an
 // account they can actually authenticate as via GitHub's own login.
+// Optional profile add-on — identity itself is the connected wallet.
 authRouter.get(
   "/github/start",
   rateLimit("github-oauth-start", 20, 3600),

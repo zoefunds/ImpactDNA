@@ -3,6 +3,7 @@ import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { Nav } from "@/components/Nav";
 import { Footer } from "@/components/Footer";
+import { Providers } from "@/components/Providers";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 const jetbrains = JetBrains_Mono({ subsets: ["latin"], variable: "--font-jetbrains" });
@@ -29,9 +30,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className="dark">
       <body className={`${inter.variable} ${jetbrains.variable} font-sans min-h-screen flex flex-col grid-bg`}>
-        <Nav />
-        <div className="pt-16 md:pt-20 flex-grow flex flex-col">{children}</div>
-        <Footer />
+        <Providers>
+          <Nav />
+          <div className="pt-16 md:pt-20 flex-grow flex flex-col">{children}</div>
+          <Footer />
+        </Providers>
       </body>
     </html>
   );

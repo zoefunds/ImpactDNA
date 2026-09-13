@@ -10,3 +10,4 @@ dist/
 coverage/
 __pycache__/
 *.pyc
+frontend/tsconfig.tsbuildinfo

@@ -1,5 +1,5 @@
 # ImpactDNA backend — always-on (24/7) configuration
-app = "impactdna-api"
+app = "impactdna-api-v2"
 primary_region = "iad"
 
 [build]

@@ -9,9 +9,19 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@metamask/connect-evm": "^2.1.1",
+    "@reown/appkit": "^1.8.23",
+    "@reown/appkit-adapter-wagmi": "^1.8.23",
+    "@tanstack/react-query": "^5.102.8",
+    "@wagmi/core": "^3.6.5",
+    "@walletconnect/ethereum-provider": "^2.24.0",
+    "accounts": "^0.18.4",
+    "genlayer-js": "^1.1.8",
     "next": "^14.2.5",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "viem": "^2.56.5",
+    "wagmi": "^3.7.7"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

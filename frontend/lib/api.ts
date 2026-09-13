@@ -62,24 +62,25 @@ export function shortAddr(addr?: string | null): string {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
-export function formatGen(atto?: string | number | null): string {
-  if (atto === null || atto === undefined) return "0";
+/** USDC uses 6 decimals (base units), unlike GEN's 18. */
+export function formatUsdc(units?: string | number | null): string {
+  if (units === null || units === undefined) return "0";
   try {
-    const n = BigInt(String(atto));
-    const whole = n / 10n ** 18n;
-    const frac = (n % 10n ** 18n) / 10n ** 14n;
-    return `${whole.toLocaleString()}${frac > 0n ? "." + String(frac).padStart(4, "0").replace(/0+$/, "") : ""}`;
+    const n = BigInt(String(units));
+    const whole = n / 10n ** 6n;
+    const frac = n % 10n ** 6n;
+    return `${whole.toLocaleString()}${frac > 0n ? "." + String(frac).padStart(6, "0").replace(/0+$/, "") : ""}`;
   } catch {
-    return String(atto);
+    return String(units);
   }
 }
 
-/** Parse a human GEN amount ("100" or "1.5") into an atto-unit integer string. */
-export function parseGen(gen: string): string {
-  const s = gen.trim();
-  if (!/^\d+(\.\d+)?$/.test(s)) throw new Error("Enter a valid GEN amount, e.g. 100 or 1.5");
+/** Parse a human USDC amount ("100" or "1.50") into a base-unit integer string. */
+export function parseUsdc(usdc: string): string {
+  const s = usdc.trim();
+  if (!/^\d+(\.\d+)?$/.test(s)) throw new Error("Enter a valid USDC amount, e.g. 100 or 1.50");
   const [whole, frac = ""] = s.split(".");
-  if (frac.length > 18) throw new Error("GEN amount has too many decimal places");
-  const fracPadded = frac.padEnd(18, "0");
-  return (BigInt(whole || "0") * 10n ** 18n + BigInt(fracPadded || "0")).toString();
+  if (frac.length > 6) throw new Error("USDC amount has too many decimal places");
+  const fracPadded = frac.padEnd(6, "0");
+  return (BigInt(whole || "0") * 10n ** 6n + BigInt(fracPadded || "0")).toString();
 }

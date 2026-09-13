@@ -78,14 +78,9 @@ export function Nav() {
               </button>
             </>
           ) : (
-            <>
-              <Link href="/login" className="text-on-variant hover:text-primary text-sm transition-colors">
-                Sign in
-              </Link>
-              <Link href="/register" className="btn-primary !py-2 !px-5 text-sm">
-                Get started
-              </Link>
-            </>
+            <Link href="/login" className="btn-primary !py-2 !px-5 text-sm">
+              Connect wallet
+            </Link>
           )}
           <button
             className="lg:hidden text-on-variant text-2xl leading-none px-2"

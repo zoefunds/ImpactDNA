@@ -44,4 +44,4 @@ jobs:
       - run: npm run build
         working-directory: frontend
         env:
-          NEXT_PUBLIC_API_URL: https://impactdna-api.fly.dev
+          NEXT_PUBLIC_API_URL: https://impactdna-api-v2.fly.dev

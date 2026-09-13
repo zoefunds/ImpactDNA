@@ -1,4 +1,5 @@
 import { Redis } from "ioredis";
+import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
 import { logger } from "./lib/logger.js";
 
@@ -120,6 +121,43 @@ export async function rateLimitHit(
   }
   entry.count += 1;
   return entry.count <= limit;
+}
+
+const localLocks = new Set<string>();
+
+/**
+ * Distributed single-flight lock (Redis SET NX PX) so relay cron ticks
+ * never run twice concurrently across Fly machines. Degrades to an
+ * in-process lock when Redis is unavailable — fine at min_machines=1,
+ * and still prevents overlapping ticks within one instance.
+ */
+export async function withLock<T>(
+  key: string,
+  ttlSeconds: number,
+  fn: () => Promise<T>,
+): Promise<T | undefined> {
+  const lockKey = `lock:${key}`;
+  const r = getClient();
+  if (r) {
+    const token = randomUUID();
+    const acquired = await r.set(lockKey, token, "EX", ttlSeconds, "NX").catch(() => null);
+    if (!acquired) return undefined;
+    try {
+      return await fn();
+    } finally {
+      // Only release if we still hold it (best-effort, not atomic — a
+      // stale lock simply expires on its own via the TTL).
+      const current = await r.get(lockKey).catch(() => null);
+      if (current === token) await r.del(lockKey).catch(() => undefined);
+    }
+  }
+  if (localLocks.has(lockKey)) return undefined;
+  localLocks.add(lockKey);
+  try {
+    return await fn();
+  } finally {
+    localLocks.delete(lockKey);
+  }
 }
 
 export async function closeRedis(): Promise<void> {

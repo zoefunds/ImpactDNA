@@ -8,19 +8,22 @@ Covers the review's two asks:
 2. Dimensions/total/bucket must agree before a score can affect
    funding (evaluate_contribution and close_epoch both enforce it).
 
-Also exercises the full deposit -> register -> verify -> submit ->
-evaluate -> close_epoch -> claim lifecycle end to end.
+Also exercises the full permissionless-epoch lifecycle end to end:
+anyone opens+names an epoch, anyone deposits USDC into it (relayed from
+Base Sepolia via record_deposit), submitters pick that epoch id,
+evaluate, close, and the relayer mirrors the claim back from the escrow.
 """
 import json
 
 import pytest
 
 import fake_genlayer as fg
-from conftest import as_sender, with_value
+from conftest import as_sender
 from impact_dna import ImpactDNA, _bucket
 
 DEV_WALLET = "0x" + "2" * 40
 OTHER_DEV_WALLET = "0x" + "3" * 40
+FUNDER_WALLET = "0x" + "4" * 40
 
 
 def make_response(status, obj):
@@ -87,9 +90,19 @@ def register_and_verify(platform, monkeypatch, username, wallet, github_id=42):
         platform.verify_developer(username)
 
 
-def submit_and_evaluate(platform, monkeypatch, username, wallet, repo, dims, id_=None):
+def open_epoch(platform, opener, label):
+    with as_sender(opener):
+        return platform.open_epoch(label)
+
+
+def deposit(platform, relayer, epoch_id, depositor, amount, tx_hash):
+    with as_sender(relayer):
+        platform.record_deposit(epoch_id, depositor, amount, tx_hash)
+
+
+def submit_and_evaluate(platform, monkeypatch, username, wallet, repo, dims, epoch_id, id_=None):
     with as_sender(wallet):
-        cid = platform.submit_contribution(repo, "library", "A perfectly good description.")
+        cid = platform.submit_contribution(repo, "library", "A perfectly good description.", epoch_id)
     install_web_get(
         monkeypatch,
         repo=repo_payload(repo, username, id=id_ or hash(repo) % 100000 + 1),
@@ -106,17 +119,15 @@ def submit_and_evaluate(platform, monkeypatch, username, wallet, repo, dims, id_
 
 
 def test_full_deposit_to_claim_lifecycle(platform, owner, monkeypatch):
-    with as_sender(owner), with_value(1_000_000):
-        platform.deposit_to_treasury()
-    assert int(platform.treasury_atto) == 1_000_000
+    # Anyone can open and name an epoch — here, the funder themself.
+    eid = open_epoch(platform, FUNDER_WALLET, "epoch one")
+    deposit(platform, owner, eid, FUNDER_WALLET, 1_000_000, "base-tx-1")
+    assert int(platform.treasury_usdc) == 1_000_000
+    assert int(platform.get_epoch(eid)["pool_usdc"]) == 1_000_000
 
     register_and_verify(platform, monkeypatch, "alice", DEV_WALLET)
     dev = platform.get_developer("alice")
     assert dev["verified"] is True
-
-    with as_sender(owner):
-        eid = platform.open_epoch(1_000_000, "epoch one")
-    assert int(platform.treasury_atto) == 0
 
     dims = {
         "downstream_usage": 18,
@@ -126,35 +137,38 @@ def test_full_deposit_to_claim_lifecycle(platform, owner, monkeypatch):
         "community_adoption": 14,
     }
     cid, result = submit_and_evaluate(
-        platform, monkeypatch, "alice", DEV_WALLET, "alice/reallib", dims
+        platform, monkeypatch, "alice", DEV_WALLET, "alice/reallib", dims, eid
     )
     assert result["eligible"] is True
     assert result["total"] == sum(dims.values())
 
-    with as_sender(owner):
-        close_result = platform.close_epoch()
+    # The epoch's own opener can close it (no curator role required).
+    with as_sender(FUNDER_WALLET):
+        close_result = platform.close_epoch(eid)
 
     assert close_result["epoch"] == eid
-    assert int(close_result["allocated_atto"]) == 1_000_000
+    assert int(close_result["allocated_usdc"]) == 1_000_000
     assert len(close_result["grants"]) == 1
     gid = close_result["grants"][0]["grant"]
 
     grant = platform.get_grant(gid)
     assert grant["claimed"] is False
-    assert int(platform.reserved_atto) == 1_000_000
+    assert int(platform.reserved_usdc) == 1_000_000
 
-    with as_sender(DEV_WALLET):
-        claim_result = platform.claim_grant(gid)
+    with as_sender(owner):
+        platform.mark_grants_relayed(eid, "base-tx-relay-1")
+        claim_result = platform.mark_grant_claimed(gid, "base-tx-claim-1")
 
-    assert claim_result["claimed"] is True
-    assert int(platform.reserved_atto) == 0
-    assert (DEV_WALLET.lower(), 1_000_000) in fg.sent_transfers
+    assert claim_result["amount_usdc"] == "1000000"
+    assert int(platform.reserved_usdc) == 0
+    assert platform.get_grant(gid)["claimed"] is True
 
     contribution = platform.get_contribution(cid)
     assert contribution["status"] == "funded"
 
-    with as_sender(DEV_WALLET), pytest.raises(fg.UserError, match="already claimed"):
-        platform.claim_grant(gid)
+    with as_sender(owner):
+        already = platform.mark_grant_claimed(gid, "base-tx-claim-2")
+    assert already["already_processed"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -166,15 +180,12 @@ def test_closed_epoch_grant_stays_claimable_without_further_deposits(
     platform, owner, monkeypatch
 ):
     """The exact regression the review flagged: allocating a full epoch
-    pool must not leave the resulting grant dependent on treasury_atto,
-    which subsequent epochs/deposits can freely drain to zero."""
-    with as_sender(owner), with_value(500_000):
-        platform.deposit_to_treasury()
+    pool must not leave the resulting grant dependent on the global
+    ledger, which subsequent epochs/deposits can freely drain to zero."""
+    eid = open_epoch(platform, FUNDER_WALLET, "sole epoch")
+    deposit(platform, owner, eid, FUNDER_WALLET, 500_000, "base-tx-b1")
 
     register_and_verify(platform, monkeypatch, "bob", DEV_WALLET)
-    with as_sender(owner):
-        platform.open_epoch(500_000, "sole epoch")
-
     dims = {
         "downstream_usage": 20,
         "technical_importance": 20,
@@ -183,29 +194,25 @@ def test_closed_epoch_grant_stays_claimable_without_further_deposits(
         "community_adoption": 20,
     }
     _, _ = submit_and_evaluate(
-        platform, monkeypatch, "bob", DEV_WALLET, "bob/thing", dims
+        platform, monkeypatch, "bob", DEV_WALLET, "bob/thing", dims, eid
     )
-    with as_sender(owner):
-        close_result = platform.close_epoch()
+    with as_sender(FUNDER_WALLET):
+        close_result = platform.close_epoch(eid)
     gid = close_result["grants"][0]["grant"]
 
-    # Treasury is now fully drained (all of it went into the epoch pool)
-    # but the grant must still be claimable because it lives in the
-    # separate reserved bucket, not treasury_atto.
-    assert int(platform.treasury_atto) == 0
-    assert int(platform.reserved_atto) == 500_000
+    # The grant is claimable because it lives in the separate reserved
+    # bucket, independent of any other epoch's pool.
+    assert int(platform.reserved_usdc) == 500_000
 
-    with as_sender(DEV_WALLET):
-        result = platform.claim_grant(gid)
-    assert result["claimed"] is True
+    with as_sender(owner):
+        platform.mark_grants_relayed(eid, "base-tx-relay-b")
+        result = platform.mark_grant_claimed(gid, "base-tx-claim-b")
+    assert result["already_processed"] is False
 
 
 def test_two_epochs_dont_let_second_drain_first_grants_claimability(
     platform, owner, monkeypatch
 ):
-    with as_sender(owner), with_value(200_000):
-        platform.deposit_to_treasury()
-
     register_and_verify(platform, monkeypatch, "carol", DEV_WALLET)
     dims = {
         "downstream_usage": 20,
@@ -215,32 +222,31 @@ def test_two_epochs_dont_let_second_drain_first_grants_claimability(
         "community_adoption": 20,
     }
 
-    with as_sender(owner):
-        platform.open_epoch(100_000, "epoch a")
+    eid_a = open_epoch(platform, FUNDER_WALLET, "epoch a")
+    deposit(platform, owner, eid_a, FUNDER_WALLET, 100_000, "base-tx-c1")
     _, _ = submit_and_evaluate(
-        platform, monkeypatch, "carol", DEV_WALLET, "carol/one", dims
+        platform, monkeypatch, "carol", DEV_WALLET, "carol/one", dims, eid_a
     )
-    with as_sender(owner):
-        close_a = platform.close_epoch()
+    with as_sender(FUNDER_WALLET):
+        close_a = platform.close_epoch(eid_a)
     gid_a = close_a["grants"][0]["grant"]
 
-    # Remaining 100_000 in treasury backs a second epoch for a second dev.
+    # A second, independently opened and funded epoch for a second dev.
     register_and_verify(platform, monkeypatch, "dave", OTHER_DEV_WALLET, github_id=99)
-    with as_sender(owner):
-        platform.open_epoch(100_000, "epoch b")
+    eid_b = open_epoch(platform, OTHER_DEV_WALLET, "epoch b")
+    deposit(platform, owner, eid_b, OTHER_DEV_WALLET, 100_000, "base-tx-c2")
     _, _ = submit_and_evaluate(
-        platform, monkeypatch, "dave", OTHER_DEV_WALLET, "dave/two", dims
+        platform, monkeypatch, "dave", OTHER_DEV_WALLET, "dave/two", dims, eid_b
     )
-    with as_sender(owner):
-        platform.close_epoch()
-
-    assert int(platform.treasury_atto) == 0
+    with as_sender(OTHER_DEV_WALLET):
+        platform.close_epoch(eid_b)
 
     # Epoch a's grant, allocated before epoch b ever existed, is still
     # fully payable.
-    with as_sender(DEV_WALLET):
-        result = platform.claim_grant(gid_a)
-    assert result["claimed"] is True
+    with as_sender(owner):
+        platform.mark_grants_relayed(eid_a, "base-tx-relay-c")
+        result = platform.mark_grant_claimed(gid_a, "base-tx-claim-c")
+    assert result["already_processed"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -260,10 +266,11 @@ def test_bucket_helper_matches_total_boundaries():
 def test_evaluate_contribution_rejects_inconsistent_dimension_sum(
     platform, owner, monkeypatch
 ):
+    eid = open_epoch(platform, FUNDER_WALLET, "epoch")
     register_and_verify(platform, monkeypatch, "erin", DEV_WALLET)
     with as_sender(DEV_WALLET):
         cid = platform.submit_contribution(
-            "erin/thing", "library", "A perfectly good description."
+            "erin/thing", "library", "A perfectly good description.", eid
         )
     install_web_get(monkeypatch, repo=repo_payload("erin/thing", "erin"))
 
@@ -308,11 +315,9 @@ def test_close_epoch_revalidates_score_consistency_on_stored_records(
     """Even a legitimately-evaluated contribution must have its stored
     dimensions/total/bucket re-checked before it can move funding at
     close_epoch time."""
-    with as_sender(owner), with_value(100_000):
-        platform.deposit_to_treasury()
+    eid = open_epoch(platform, FUNDER_WALLET, "epoch")
+    deposit(platform, owner, eid, FUNDER_WALLET, 100_000, "base-tx-f1")
     register_and_verify(platform, monkeypatch, "frank", DEV_WALLET)
-    with as_sender(owner):
-        platform.open_epoch(100_000, "epoch")
 
     dims = {
         "downstream_usage": 20,
@@ -322,7 +327,7 @@ def test_close_epoch_revalidates_score_consistency_on_stored_records(
         "community_adoption": 20,
     }
     cid, _ = submit_and_evaluate(
-        platform, monkeypatch, "frank", DEV_WALLET, "frank/repo", dims
+        platform, monkeypatch, "frank", DEV_WALLET, "frank/repo", dims, eid
     )
 
     # Directly corrupt the persisted record's total, simulating any
@@ -332,5 +337,21 @@ def test_close_epoch_revalidates_score_consistency_on_stored_records(
     record["score_total"] = record["score_total"] + 1
     platform.contributions[cid] = json.dumps(record, sort_keys=True)
 
-    with as_sender(owner), pytest.raises(fg.UserError, match="do not sum to total"):
-        platform.close_epoch()
+    with as_sender(FUNDER_WALLET), pytest.raises(fg.UserError, match="do not sum to total"):
+        platform.close_epoch(eid)
+
+
+def test_open_epoch_is_permissionless_and_close_requires_opener_or_curator(
+    platform, owner, monkeypatch
+):
+    eid = open_epoch(platform, DEV_WALLET, "anyone's epoch")
+    assert platform.get_epoch(eid)["opener"] == DEV_WALLET.lower()
+
+    # A random third party is neither the opener nor a curator.
+    with as_sender(OTHER_DEV_WALLET), pytest.raises(fg.UserError, match="opener"):
+        platform.close_epoch(eid)
+
+    # The opener themself can close it (still zero grants — fine).
+    with as_sender(DEV_WALLET):
+        result = platform.close_epoch(eid)
+    assert result["epoch"] == eid

@@ -1,10 +1,8 @@
 import { Router } from "express";
 import { z } from "zod";
 import { query } from "../db.js";
-import { contractWrite, contractRead } from "../lib/genlayer.js";
-import { revealPrivateKey } from "../lib/wallet.js";
+import { contractRead } from "../lib/genlayer.js";
 import { requireAuth } from "../middleware/auth.js";
-import { rateLimit } from "../middleware/rateLimit.js";
 import { wrap, validateBody, HttpError } from "../middleware/errors.js";
 import { sendEmail, notifyEmail } from "../lib/email.js";
 import { logger } from "../lib/logger.js";
@@ -16,198 +14,62 @@ import { config } from "../config.js";
 const CONTRACT_ADDRESS = config.GENLAYER_CONTRACT_ADDRESS;
 
 /**
- * Authenticated on-chain actions. Each write is signed with the calling
- * user's custodial wallet so the contract sees their real address.
- * GenLayer consensus (including LLM evaluation) happens on-chain; this
- * layer only submits transactions, mirrors results, and notifies.
+ * Every write against the GenLayer contract (register_developer,
+ * submit_contribution, evaluate_contribution, request_appeal, ...) is
+ * now signed client-side, directly by the user's own connected wallet
+ * via genlayer-js + the AppKit wallet provider (frontend/lib/wallet.ts) —
+ * genlayer-js's createClient accepts a generic EIP-1193 `provider`, so
+ * the same wallet used for Base Sepolia signs GenLayer txs too. This
+ * layer only mirrors already-confirmed on-chain state for fast
+ * dashboards and sends notification emails; it never holds or signs
+ * with anyone's key.
  */
 export const contributionsRouter = Router();
 
-const CATEGORIES = [
-  "library",
-  "sdk",
-  "tooling",
-  "documentation",
-  "smart-contract",
-  "infrastructure",
-  "education",
-  "research",
-  "application",
-] as const;
-
-async function userWalletKey(userId: string): Promise<{ key: string; email: string; github: string | null }> {
-  const found = await query(
-    "SELECT wallet_ciphertext, email, github_username FROM users WHERE id = $1",
-    [userId],
-  );
-  if (!found.rowCount) throw new HttpError(404, "User not found");
-  return {
-    key: revealPrivateKey(String(found.rows[0].wallet_ciphertext)),
-    email: String(found.rows[0].email),
-    github: found.rows[0].github_username as string | null,
-  };
-}
-
-// ------------------------------------------------- register on-chain identity
-// githubUsername is never taken as free text: it must already be linked
-// via the GitHub OAuth flow (see /api/auth/github/start), so a user can
-// only register the account they actually authenticated as.
+// ------------------------------------------------------- sync a submission
+// Called by the frontend right after its own submit_contribution tx is
+// accepted, so the dashboard doesn't have to wait on a slow chain scan.
 contributionsRouter.post(
-  "/register-developer",
+  "/sync",
   requireAuth,
-  rateLimit("chain-register", 5, 3600),
-  validateBody(z.object({ displayName: z.string().trim().min(2).max(60) })),
+  validateBody(z.object({ contributionId: z.string().min(1).max(40), txHash: z.string().optional() })),
   wrap(async (req, res) => {
-    const { displayName } = req.body as { displayName: string };
-    const { key, github } = await userWalletKey(req.user!.id);
-    if (!github) throw new HttpError(400, "Connect your GitHub account first");
-    const result = await contractWrite(key, "register_developer", [github, displayName]);
-    res.json({ ok: true, tx: result });
-  }),
-);
+    const { contributionId, txHash } = req.body as { contributionId: string; txHash?: string };
+    const onchain = (await contractRead("get_contribution", [contributionId], { skipCache: true })) as
+      Record<string, unknown>;
+    await query(
+      `INSERT INTO contribution_mirror
+         (contribution_id, user_id, repo, category, status, score_total, eligible, payload, tx_hash, contract_address)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+       ON CONFLICT (contract_address, contribution_id) DO UPDATE
+         SET status = EXCLUDED.status, score_total = EXCLUDED.score_total,
+             eligible = EXCLUDED.eligible, payload = EXCLUDED.payload, updated_at = now()`,
+      [
+        contributionId,
+        req.user!.id,
+        String(onchain.repo ?? ""),
+        String(onchain.category ?? "library"),
+        String(onchain.status ?? "submitted"),
+        Number(onchain.score_total ?? 0),
+        Boolean(onchain.eligible),
+        JSON.stringify(onchain),
+        txHash ?? null,
+        CONTRACT_ADDRESS,
+      ],
+    );
 
-// -------------------------------------------------------- verify via GitHub
-contributionsRouter.post(
-  "/verify-developer",
-  requireAuth,
-  rateLimit("chain-verify", 5, 3600),
-  wrap(async (req, res) => {
-    const { key, github } = await userWalletKey(req.user!.id);
-    if (!github) throw new HttpError(400, "Register a GitHub username first");
-    const result = await contractWrite(key, "verify_developer", [github]);
-    res.json({ ok: true, tx: result });
-  }),
-);
-
-// ------------------------------------------------------------------ submit
-contributionsRouter.post(
-  "/",
-  requireAuth,
-  rateLimit("chain-submit", 10, 3600),
-  validateBody(
-    z.object({
-      repo: z
-        .string()
-        .trim()
-        .regex(/^[A-Za-z0-9_.\-]+\/[A-Za-z0-9_.\-]+$/, "repo must be owner/name"),
-      category: z.enum(CATEGORIES),
-      description: z.string().trim().min(20).max(2000),
-    }),
-  ),
-  wrap(async (req, res) => {
-    const { repo, category, description } = req.body as {
-      repo: string;
-      category: (typeof CATEGORIES)[number];
-      description: string;
-    };
-    const { key } = await userWalletKey(req.user!.id);
-    const result = await contractWrite(key, "submit_contribution", [repo, category, description]);
-
-    // Mirror locally for fast dashboards (best effort). The canonical id
-    // comes from the chain itself — receipts don't reliably expose it.
-    try {
-      let cid = extractReturnedId(result.result);
-      if (!cid) {
-        const onchain = (await contractRead("get_contribution_by_repo", [repo], {
-          skipCache: true,
-        })) as { id?: string } | null;
-        cid = onchain?.id ?? null;
+    if (onchain.status === "evaluated" || onchain.status === "rejected") {
+      const found = await query("SELECT email FROM users WHERE id = $1", [req.user!.id]);
+      const email = found.rows[0]?.email as string | null;
+      if (email) {
+        const mail = notifyEmail(
+          "Evaluation complete",
+          `Your contribution <b>${contributionId}</b> has been evaluated by GenLayer validator consensus. Open your dashboard to see the impact score and funding eligibility.`,
+        );
+        void sendEmail({ to: email, ...mail, kind: "evaluation_done", userId: req.user!.id });
       }
-      await query(
-        `INSERT INTO contribution_mirror (contribution_id, user_id, repo, category, tx_hash, contract_address)
-         VALUES ($1,$2,$3,$4,$5,$6)
-         ON CONFLICT (contract_address, contribution_id) DO NOTHING`,
-        [cid ?? `tx-${result.txHash.slice(0, 18)}`, req.user!.id, repo, category, result.txHash, CONTRACT_ADDRESS],
-      );
-    } catch (err) {
-      logger.warn({ err }, "mirror insert failed");
     }
-    res.status(201).json({ ok: true, tx: result });
-  }),
-);
-
-// ---------------------------------------------------------------- evaluate
-contributionsRouter.post(
-  "/:id/evaluate",
-  requireAuth,
-  rateLimit("chain-evaluate", 6, 3600),
-  wrap(async (req, res) => {
-    const contributionId = String(req.params.id);
-    const { key, email } = await userWalletKey(req.user!.id);
-    const result = await contractWrite(key, "evaluate_contribution", [contributionId]);
-
-    try {
-      // Pull the authoritative record from the chain and reconcile the
-      // mirror by repo (covers rows stored under a fallback tx- id).
-      const onchain = (await contractRead("get_contribution", [contributionId], {
-        skipCache: true,
-      })) as Record<string, unknown>;
-      await query(
-        `UPDATE contribution_mirror
-         SET contribution_id = $1, status = $2, score_total = $3, eligible = $4,
-             payload = $5, updated_at = now()
-         WHERE contract_address = $6 AND (repo = $7 OR contribution_id = $1)`,
-        [
-          contributionId,
-          String(onchain.status ?? "evaluated"),
-          Number(onchain.score_total ?? 0),
-          Boolean(onchain.eligible),
-          JSON.stringify(onchain ?? {}),
-          CONTRACT_ADDRESS,
-          String(onchain.repo ?? ""),
-        ],
-      );
-    } catch (err) {
-      logger.warn({ err }, "mirror update failed");
-    }
-
-    const mail = notifyEmail(
-      "Evaluation complete",
-      `Your contribution <b>${contributionId}</b> has been evaluated by GenLayer validator consensus. Open your dashboard to see the impact score and funding eligibility.`,
-    );
-    void sendEmail({ to: email, ...mail, kind: "evaluation_done", userId: req.user!.id });
-
-    res.json({ ok: true, tx: result });
-  }),
-);
-
-// ------------------------------------------------------------------ appeal
-contributionsRouter.post(
-  "/:id/appeal",
-  requireAuth,
-  rateLimit("chain-appeal", 4, 3600),
-  validateBody(z.object({ reason: z.string().trim().min(20).max(1500) })),
-  wrap(async (req, res) => {
-    const { reason } = req.body as { reason: string };
-    const { key } = await userWalletKey(req.user!.id);
-    const result = await contractWrite(key, "request_appeal", [String(req.params.id), reason]);
-    res.json({ ok: true, tx: result });
-  }),
-);
-
-// -------------------------------------------------------------- claim grant
-contributionsRouter.post(
-  "/grants/:grantId/claim",
-  requireAuth,
-  rateLimit("chain-claim", 10, 3600),
-  wrap(async (req, res) => {
-    const grantId = String(req.params.grantId);
-    const { key, email } = await userWalletKey(req.user!.id);
-
-    // claim_grant now pays out real GEN atomically, in the same call:
-    // the contract holds the funds directly and sends them via
-    // _send_gen once the claim is recorded (checks-effects-interactions
-    // — see contracts/impact_dna.py). If the transfer fails, the whole
-    // call reverts and nothing is marked claimed, so there's no
-    // partial/inconsistent state to reconcile or retry here.
-    const result = await contractWrite(key, "claim_grant", [grantId]);
-
-    const mail = notifyEmail(
-      "Grant claimed",
-      `Your retroactive funding grant <b>${grantId}</b> has been claimed on-chain and the GEN payout has been sent to your wallet.`,
-    );
-    void sendEmail({ to: email, ...mail, kind: "grant_claimed", userId: req.user!.id });
-    res.json({ ok: true, tx: result });
+    res.json({ ok: true });
   }),
 );
 
@@ -271,38 +133,7 @@ contributionsRouter.get(
        ORDER BY created_at DESC LIMIT 100`,
       [req.user!.id, CONTRACT_ADDRESS],
     );
-
-    // Self-heal rows stored under a fallback tx- id (or left stale) by
-    // reconciling with the authoritative on-chain record.
-    const items = await Promise.all(
-      rows.rows.map(async (row) => {
-        const stale = String(row.contribution_id).startsWith("tx-") || row.status === "submitted";
-        if (!stale) return row;
-        try {
-          const onchain = (await contractRead("get_contribution_by_repo", [String(row.repo)], 60)) as
-            Record<string, unknown>;
-          const fixed = {
-            ...row,
-            contribution_id: String(onchain.id ?? row.contribution_id),
-            status: String(onchain.status ?? row.status),
-            score_total: Number(onchain.score_total ?? row.score_total),
-            eligible: Boolean(onchain.eligible ?? row.eligible),
-          };
-          if (fixed.contribution_id !== row.contribution_id || fixed.status !== row.status) {
-            void query(
-              `UPDATE contribution_mirror
-               SET contribution_id = $1, status = $2, score_total = $3, eligible = $4, updated_at = now()
-               WHERE repo = $5 AND user_id = $6 AND contract_address = $7`,
-              [fixed.contribution_id, fixed.status, fixed.score_total, fixed.eligible, row.repo, req.user!.id, CONTRACT_ADDRESS],
-            ).catch((err) => logger.warn({ err }, "mirror self-heal failed"));
-          }
-          return fixed;
-        } catch {
-          return row;
-        }
-      }),
-    );
-    res.json({ items });
+    res.json({ items: rows.rows });
   }),
 );
 
@@ -310,6 +141,9 @@ contributionsRouter.get(
 // The contract only exposes paginated list_grants (no per-wallet filter),
 // so we page through it server-side and match by wallet. Grant volume is
 // expected to stay small (one grant per eligible contribution per epoch).
+// Recipients claim their USDC directly on the Base Sepolia escrow
+// (ImpactDnaEscrow.claim) once the relayer has pushed the epoch's grants
+// there — this endpoint is read-only, listing what's owed/claimed.
 contributionsRouter.get(
   "/grants/mine",
   requireAuth,
@@ -333,19 +167,6 @@ contributionsRouter.get(
       offset += pageSize;
       if (offset >= batch.total) break;
     }
-
-    // claim_grant now pays out real GEN atomically on-chain, so the
-    // grant's own `claimed` field is the authoritative payout status —
-    // no separate off-chain payout ledger to join against.
     res.json({ items: mine });
   }),
 );
-
-function extractReturnedId(consensusData: unknown): string | null {
-  if (typeof consensusData === "string" && consensusData.startsWith("c-")) return consensusData;
-  if (consensusData && typeof consensusData === "object") {
-    const maybe = (consensusData as Record<string, unknown>).result;
-    if (typeof maybe === "string" && maybe.startsWith("c-")) return maybe;
-  }
-  return null;
-}

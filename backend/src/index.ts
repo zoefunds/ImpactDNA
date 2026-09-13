@@ -12,6 +12,7 @@ import { contributionsRouter } from "./routes/contributions.js";
 import { adminRouter } from "./routes/admin.js";
 import { notFound, errorHandler } from "./middleware/errors.js";
 import { rateLimit } from "./middleware/rateLimit.js";
+import { startRelayLoop } from "./jobs/relay.js";
 
 /**
  * ImpactDNA API server.
@@ -61,6 +62,7 @@ process.on("uncaughtException", (err) => {
 
 async function main(): Promise<void> {
   await migrate();
+  startRelayLoop();
   const server = app.listen(config.PORT, "0.0.0.0", () => {
     logger.info({ port: config.PORT }, "ImpactDNA API listening");
   });

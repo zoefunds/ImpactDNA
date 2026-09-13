@@ -3,12 +3,15 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useState } from "react";
+import { useAccount } from "wagmi";
 import { GlassCard, StatCard, StatusChip, Spinner, ErrorNote } from "@/components/ui";
-import { api, API_URL, currentUser, formatGen, getToken, shortAddr } from "@/lib/api";
+import { api, API_URL, currentUser, formatUsdc, getToken, shortAddr } from "@/lib/api";
+import { genlayerWrite, genlayerRead } from "@/lib/genlayerClient";
+import { claimGrant } from "@/lib/escrowClient";
 
 interface User {
   displayName: string;
-  email: string;
+  email: string | null;
   githubUsername: string | null;
   walletAddress: string;
   role: string;
@@ -25,8 +28,10 @@ interface Mine {
   }>;
 }
 
-interface PlatformInfo {
-  current_epoch: string;
+interface Epoch {
+  id: string;
+  label: string;
+  status: string;
 }
 
 interface Grants {
@@ -34,8 +39,10 @@ interface Grants {
     id: string;
     epoch: string;
     contribution: string;
-    amount_atto: string;
+    amount_usdc: string;
     claimed: boolean;
+    relayed: boolean;
+    wallet: string;
   }>;
 }
 
@@ -55,18 +62,17 @@ export default function Dashboard() {
 function DashboardInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { address } = useAccount();
   const [user, setUser] = useState<User | null>(null);
   const [mine, setMine] = useState<Mine | null>(null);
   const [grants, setGrants] = useState<Grants | null>(null);
-  const [platformInfo, setPlatformInfo] = useState<PlatformInfo | null>(null);
+  const [openEpochs, setOpenEpochs] = useState<Epoch[]>([]);
   const [onchainDev, setOnchainDev] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState("");
 
-  const [submitForm, setSubmitForm] = useState({ repo: "", category: "library", description: "" });
-  const [exportPw, setExportPw] = useState("");
-  const [exportedKey, setExportedKey] = useState("");
+  const [submitForm, setSubmitForm] = useState({ repo: "", category: "library", description: "", epochId: "" });
 
   const refresh = useCallback(async () => {
     const u = currentUser<User>();
@@ -74,8 +80,12 @@ function DashboardInner() {
     if (!u) return;
     api<Mine>("/api/contributions/mine").then(setMine).catch(() => null);
     api<Grants>("/api/contributions/grants/mine").then(setGrants).catch(() => null);
-    api<{ info: PlatformInfo }>("/api/platform/info", { auth: false })
-      .then((r) => setPlatformInfo(r.info))
+    api<{ items: Epoch[] }>("/api/platform/epochs", { auth: false })
+      .then((r) => {
+        const open = r.items.filter((e) => e.status === "open");
+        setOpenEpochs(open);
+        setSubmitForm((f) => (f.epochId ? f : { ...f, epochId: open[0]?.id ?? "" }));
+      })
       .catch(() => null);
     if (u.githubUsername) {
       api<Record<string, unknown>>(`/api/platform/developers/${u.githubUsername}`, { auth: false })
@@ -107,14 +117,22 @@ function DashboardInner() {
     if (github) router.replace("/dashboard");
   }, [searchParams, router]);
 
-  async function run(name: string, fn: () => Promise<unknown>, doneMsg: string) {
+  async function run(
+    name: string,
+    fn: () => Promise<unknown>,
+    doneMsg: string,
+    opts?: { skipRefresh?: boolean },
+  ) {
     setError("");
     setNotice("");
     setBusy(name);
     try {
       await fn();
       setNotice(doneMsg);
-      await refresh();
+      // Actions that already applied a precise local update (register,
+      // verify, claim) skip this — otherwise this cached backend refetch
+      // immediately clobbers the fresh state we just set with stale data.
+      if (!opts?.skipRefresh) await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Action failed");
     } finally {
@@ -125,7 +143,7 @@ function DashboardInner() {
   if (!user) return <Spinner />;
 
   const verified = Boolean(onchainDev?.verified);
-  const epochOpen = Boolean(platformInfo?.current_epoch);
+  const epochOpen = openEpochs.length > 0;
 
   return (
     <main className="max-w-container mx-auto w-full px-4 md:px-12 py-10 space-y-6">
@@ -171,6 +189,7 @@ function DashboardInner() {
               Connect your GitHub account (OAuth — we never accept a typed username, so you can
               only link the account you actually control), register it on-chain, then verify it —
               validators fetch your GitHub profile inside consensus to prove it exists and matches.
+              These two writes are signed directly by your connected wallet.
             </p>
             {!user.githubUsername ? (
               <a className="btn-primary inline-flex items-center gap-2"
@@ -182,11 +201,12 @@ function DashboardInner() {
                 <span className="font-mono text-sm text-on-variant">@{user.githubUsername} connected</span>
                 <button className="btn-primary" disabled={busy !== ""}
                   onClick={() =>
-                    run("register", () =>
-                      api("/api/contributions/register-developer", {
-                        method: "POST",
-                        body: { displayName: user.displayName },
-                      }), "Developer registered on-chain. Now verify your identity.")
+                    run("register", async () => {
+                      await genlayerWrite("register_developer", [user.githubUsername, user.displayName]);
+                      // Read fresh instead of waiting on the backend's ~90s
+                      // cached read, so the "Verify" step appears immediately.
+                      setOnchainDev(await genlayerRead("get_developer", [user.githubUsername]) as Record<string, unknown>);
+                    }, "Developer registered on-chain. Now verify your identity.", { skipRefresh: true })
                   }>
                   {busy === "register" ? "Submitting to GenLayer…" : "Register on-chain"}
                 </button>
@@ -200,8 +220,10 @@ function DashboardInner() {
                 <span className="font-mono text-sm text-on-variant">@{user.githubUsername}</span>
                 <button className="btn-ghost" disabled={busy !== ""}
                   onClick={() =>
-                    run("verify", () => api("/api/contributions/verify-developer", { method: "POST" }),
-                      "GitHub identity verified on-chain.")
+                    run("verify", async () => {
+                      await genlayerWrite("verify_developer", [user.githubUsername]);
+                      setOnchainDev(await genlayerRead("get_developer", [user.githubUsername]) as Record<string, unknown>);
+                    }, "GitHub identity verified on-chain.", { skipRefresh: true })
                   }>
                   {busy === "verify" ? "Validators verifying…" : "Verify via GitHub"}
                 </button>
@@ -215,16 +237,19 @@ function DashboardInner() {
               <span className="text-cyan-dim">02</span> Submit a contribution
             </h2>
             <p className="text-on-variant text-sm mb-6">
-              Submit an open-source repository you shipped. Evaluation judges its real downstream
-              impact months after release — thin demos and forks score near zero.
+              Submit an open-source repository you shipped, into an open funding epoch. Evaluation
+              judges its real downstream impact months after release — thin demos and forks score
+              near zero. Anyone can{" "}
+              <Link href="/funding" className="text-primary hover:underline">open a new epoch</Link>{" "}
+              if none is open.
             </p>
             {!epochOpen && (
               <p className="text-sm text-primary mb-4 font-mono">
-                No funding epoch is open right now — submissions are enabled once a curator opens one.
+                No funding epoch is open right now — open one from the Funding page.
               </p>
             )}
             <fieldset disabled={!epochOpen} className="contents">
-              <div className="grid md:grid-cols-2 gap-4 mb-4">
+              <div className="grid md:grid-cols-3 gap-4 mb-4">
                 <input className="input-field" placeholder="owner/repository"
                   value={submitForm.repo}
                   onChange={(e) => setSubmitForm({ ...submitForm, repo: e.target.value })} />
@@ -232,16 +257,26 @@ function DashboardInner() {
                   onChange={(e) => setSubmitForm({ ...submitForm, category: e.target.value })}>
                   {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
+                <select className="input-field" value={submitForm.epochId}
+                  onChange={(e) => setSubmitForm({ ...submitForm, epochId: e.target.value })}>
+                  {openEpochs.map((e) => <option key={e.id} value={e.id}>{e.label} ({e.id})</option>)}
+                </select>
               </div>
               <textarea className="input-field min-h-[100px] mb-4"
                 placeholder="What does it do, and what depends on it? (min 20 chars — validators treat this skeptically and check real evidence)"
                 value={submitForm.description}
                 onChange={(e) => setSubmitForm({ ...submitForm, description: e.target.value })} />
-              <button className="btn-primary" disabled={busy !== "" || !verified || !epochOpen}
+              <button className="btn-primary" disabled={busy !== "" || !verified || !epochOpen || !submitForm.epochId}
                 onClick={() =>
-                  run("submit", () =>
-                    api("/api/contributions", { method: "POST", body: submitForm }),
-                    "Contribution submitted on-chain.")
+                  run("submit", async () => {
+                    const { result } = await genlayerWrite("submit_contribution", [
+                      submitForm.repo, submitForm.category, submitForm.description, submitForm.epochId,
+                    ]);
+                    const contributionId = typeof result === "string" ? result : String((result as { result?: string })?.result ?? "");
+                    if (contributionId) {
+                      await api("/api/contributions/sync", { method: "POST", body: { contributionId } }).catch(() => null);
+                    }
+                  }, "Contribution submitted on-chain.")
                 }>
                 {busy === "submit"
                   ? "Submitting to GenLayer…"
@@ -280,9 +315,13 @@ function DashboardInner() {
                       {c.status === "submitted" && (
                         <button className="btn-ghost !py-1.5 !px-4 text-xs" disabled={busy !== ""}
                           onClick={() =>
-                            run(`eval-${c.contribution_id}`, () =>
-                              api(`/api/contributions/${c.contribution_id}/evaluate`, { method: "POST" }),
-                              "Evaluation complete — check the report.")
+                            run(`eval-${c.contribution_id}`, async () => {
+                              await genlayerWrite("evaluate_contribution", [c.contribution_id]);
+                              await api("/api/contributions/sync", {
+                                method: "POST",
+                                body: { contributionId: c.contribution_id },
+                              }).catch(() => null);
+                            }, "Evaluation complete — check the report.")
                           }>
                           {busy === `eval-${c.contribution_id}` ? "Consensus running…" : "Evaluate now"}
                         </button>
@@ -306,17 +345,28 @@ function DashboardInner() {
                     className="p-4 bg-surface-low border border-outline-variant/30 rounded-lg flex flex-col md:flex-row md:items-center justify-between gap-3">
                     <div>
                       <p className="font-mono text-on-surface">{g.id} <span className="text-on-variant text-xs">· {g.contribution}</span></p>
-                      <p className="font-mono text-sm text-green mt-1">{formatGen(g.amount_atto)} GEN</p>
+                      <p className="font-mono text-sm text-green mt-1">{formatUsdc(g.amount_usdc)} USDC</p>
                     </div>
                     <div className="flex items-center gap-3">
                       {g.claimed ? (
-                        <span className="font-mono text-xs text-green">✓ claimed — GEN sent to your wallet</span>
+                        <span className="font-mono text-xs text-green">✓ claimed — USDC sent to your wallet</span>
+                      ) : !g.relayed ? (
+                        <span className="font-mono text-xs text-on-variant">pending relay to escrow</span>
                       ) : (
-                        <button className="btn-primary !py-1.5 !px-4 text-xs" disabled={busy !== ""}
+                        <button className="btn-primary !py-1.5 !px-4 text-xs" disabled={busy !== "" || address?.toLowerCase() !== g.wallet.toLowerCase()}
                           onClick={() =>
-                            run(`claim-${g.id}`, () =>
-                              api(`/api/contributions/grants/${g.id}/claim`, { method: "POST" }),
-                              "Grant claimed — GEN sent to your wallet.")
+                            run(`claim-${g.id}`, async () => {
+                              await claimGrant(g.epoch);
+                              // The escrow tx succeeding IS the authoritative
+                              // claim — GenLayer's own `claimed` flag only
+                              // flips once the relayer mirrors the event
+                              // later, so update locally now.
+                              setGrants((prev) =>
+                                prev
+                                  ? { ...prev, items: prev.items.map((x) => (x.id === g.id ? { ...x, claimed: true } : x)) }
+                                  : prev,
+                              );
+                            }, "Grant claimed — USDC sent to your wallet directly by the escrow.", { skipRefresh: true })
                           }>
                           {busy === `claim-${g.id}` ? "Claiming…" : "Claim"}
                         </button>
@@ -332,46 +382,14 @@ function DashboardInner() {
         {/* Right rail: wallet */}
         <div className="lg:col-span-4 space-y-6">
           <GlassCard className="p-6">
-            <h3 className="label-caps text-on-variant mb-4">Permanent wallet</h3>
+            <h3 className="label-caps text-on-variant mb-4">Connected wallet</h3>
             <p className="font-mono text-xs break-all bg-surface-lowest p-3 rounded-lg text-green mb-4">
               {user.walletAddress}
             </p>
-            <p className="text-xs text-on-variant mb-6 leading-relaxed">
-              Generated at signup, AES-256-GCM encrypted server-side. Survives device changes,
-              reinstalls and cache clears. StudioNet is gasless — no funding needed.
+            <p className="text-xs text-on-variant leading-relaxed">
+              This is your own wallet — ImpactDNA never holds a key for you. Every on-chain action
+              (register, verify, submit, evaluate, deposit, claim) is signed directly by it.
             </p>
-            <h4 className="label-caps text-on-variant mb-3">Export private key</h4>
-            {exportedKey ? (
-              <div className="space-y-3">
-                <p className="font-mono text-[11px] break-all bg-surface-lowest p-3 rounded-lg text-danger">
-                  {exportedKey}
-                </p>
-                <p className="text-xs text-danger">
-                  Store this in a password manager. Anyone with it controls your wallet.
-                </p>
-                <button className="btn-ghost w-full !py-2 text-xs" onClick={() => setExportedKey("")}>
-                  Hide key
-                </button>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                <input className="input-field" type="password" placeholder="Confirm account password"
-                  value={exportPw} onChange={(e) => setExportPw(e.target.value)} />
-                <button className="btn-ghost w-full !py-2 text-xs" disabled={busy !== "" || !exportPw}
-                  onClick={() =>
-                    run("export", async () => {
-                      const r = await api<{ privateKey: string }>("/api/wallet/export", {
-                        method: "POST",
-                        body: { password: exportPw },
-                      });
-                      setExportedKey(r.privateKey);
-                      setExportPw("");
-                    }, "Key revealed below — handle with care.")
-                  }>
-                  {busy === "export" ? "Verifying…" : "Reveal private key"}
-                </button>
-              </div>
-            )}
           </GlassCard>
 
           <GlassCard className="p-6">
@@ -382,7 +400,7 @@ function DashboardInner() {
                 "LLM scores 5 impact dimensions over the fetched evidence",
                 "Every validator independently re-fetches and re-scores",
                 "Hard gates (fork / ownership / eligibility) must match; scores agree within tolerance",
-                "Eligible work competes for the epoch funding pool by impact weight",
+                "Eligible work competes for that epoch's funding pool by impact weight",
               ].map((s, i) => (
                 <li key={i} className="flex gap-3">
                   <span className="font-mono text-cyan-dim text-xs pt-0.5">{String(i + 1).padStart(2, "0")}</span>
