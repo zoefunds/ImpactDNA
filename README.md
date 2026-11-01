@@ -19,7 +19,7 @@ ImpactDNA flips the traditional grants model: instead of funding proposals befor
 
 The verified Base Sepolia deposit-to-claim transaction chain is documented in [`docs/MILESTONE-REMEDIATION.md`](docs/MILESTONE-REMEDIATION.md#live-base-sepolia-deposit-to-claim-evidence).
 
-Constructor: `platform_name="ImpactDNA"`, `min_eligible_score=40` (owner-adjustable).
+Constructor: `platform_name="ImpactDNA"`, `min_eligible_score=60` (owner-adjustable).
 
 This is a full relaunch (2026-09-13) of an earlier native-GEN, email/password version — see [Current stage & path forward](#current-stage--path-forward) for what changed and why.
 

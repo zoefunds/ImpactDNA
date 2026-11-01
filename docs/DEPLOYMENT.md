@@ -7,7 +7,7 @@ Deployed to StudioNet at `0xC7606d65963A7e45a2A5E08B102C73efBB307466`.
 To redeploy (e.g. after changes):
 1. Open https://studio.genlayer.com, create/select an account.
 2. Upload `contracts/impact_dna.py`.
-3. Constructor: `platform_name` (string), `min_eligible_score` (int, recommend **40**).
+3. Constructor: `platform_name` (string), `min_eligible_score` (int; current deployment uses **60**).
 4. Deploy on **StudioNet** (gasless — 0 GEN balance is fine).
 5. Point the relayer at itself: `genlayer write <ADDR> set_relayer --args <relayer_address>` (the deployer is both owner and first curator by default, but `relayer` needs setting explicitly if it should differ from the deployer).
 6. Put the new address in backend secrets (`GENLAYER_CONTRACT_ADDRESS`) and frontend env (`NEXT_PUBLIC_GENLAYER_CONTRACT_ADDRESS`).
