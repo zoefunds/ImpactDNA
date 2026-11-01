@@ -6,9 +6,9 @@ Last verified: 2026-11-01. This file records current operational facts; historic
 
 - Frontend: `https://impactdna.vercel.app`
 - Backend: `https://impactdna-milestone-api.fly.dev` (`impactdna-milestone-api`, Fly region `iad`)
-- Database: `impactdna-milestone-db`; migrations `001` through `009` applied
+- Database: `impactdna-milestone-db`; migrations `001` through `010` applied
 - GenLayer StudioNet contract: `0xC7606d65963A7e45a2A5E08B102C73efBB307466`
-- Base Sepolia escrow: `0x728A280E9E2DD05320B8AbA89Cd7c4E79046Cc07`
+- Base Sepolia escrow: `0x51c7575D0893D6a5cc98dA5356A8e727502Eb8B0`
 - Base Sepolia USDC: `0x036CbD53842c5426634e7929541eC2318f3dCF7e`
 - Owner, relayer, and first curator: `0x0f4CAd4b62DfcEce23a6e88565BFf83C703B28e2` (rotated 2026-11-01)
 - Eligibility threshold: `60`
@@ -21,6 +21,8 @@ Both chains are testnets. The Base escrow is the sole custodian of USDC; GenLaye
 - Developer registration requires a public proof gist created through authenticated GitHub OAuth. Its owner and exact `{github, wallet}` payload are independently verified on-chain before a username is reserved.
 - User actions are signed by the connected wallet. Only curator/admin operations and relay acknowledgements use trusted backend keys.
 - Every Base deposit has a unique `depositId`. It remains pending until GenLayer accepts or rejects it; rejected or late deposits become exactly refundable.
+- Deposits with an unrecognized epoch hash are persisted and reconciled as refundable; the scan cursor never discards them.
+- Base tracks `pendingDepositCount` per epoch and forbids any terminal settlement while the count is non-zero. The backend also defers settlement while a matching durable queue row is pending.
 - Accepted collateral cannot be withdrawn while active. Grants can only be allocated from accepted collateral.
 - Relay scans are durable: deposits and claims are persisted in Postgres before cursors advance. Failed events remain retryable, and multi-grant claims in one transaction are supported.
 - Funded epochs with no eligible recipients terminate through relayer-only `settleEmptyEpoch`; collateral remains locked until that settlement and only the unallocated balance can then be recovered.
@@ -38,8 +40,8 @@ Both chains are testnets. The Base escrow is the sole custodian of USDC; GenLaye
 ## Verification
 
 - Python Intelligent Contract tests: 13 passing.
-- Solidity escrow regression tests: 5 passing.
-- Backend relay/receipt tests: 7 passing.
+- Solidity escrow regression tests: 7 passing.
+- Backend relay/receipt tests: 8 passing.
 - Frontend production build: passing (third-party `ox` dynamic-import warnings remain non-fatal).
 - A complete 1-USDC Base Sepolia deposit-to-claim run is recorded in `docs/MILESTONE-REMEDIATION.md`.
 - Fly production is healthy with migration `009` applied; Vercel production is Ready and exposes the coordinated contract addresses.

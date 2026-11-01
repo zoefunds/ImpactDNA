@@ -7,6 +7,8 @@ export const IMPACT_DNA_ESCROW_ABI = [
   "event Claimed(bytes32 indexed epochId, address indexed recipient, uint256 amount)",
   "function deposit(bytes32 epochId, bytes32 depositId, uint256 amount) external",
   "function reconcileDeposit(bytes32 depositId, bool accepted) external",
+  "function deposits(bytes32 depositId) external view returns (bytes32 epochId, address depositor, uint256 amount, uint8 status)",
+  "function pendingDepositCount(bytes32 epochId) external view returns (uint256)",
   "function refundDeposit(bytes32 depositId) external",
   "function setGrants(bytes32 epochId, address[] recipients, uint256[] amounts) external",
   "function settleEmptyEpoch(bytes32 epochId) external",

@@ -37,6 +37,7 @@ contract ImpactDnaEscrowTest {
     address constant FUNDER = address(0xA11CE);
     address constant RECIPIENT = address(0xCAFE);
     bytes32 constant EPOCH = keccak256("e-1");
+    bytes32 constant UNKNOWN_EPOCH = keccak256("not-a-genlayer-epoch");
 
     function setUp() public {
         token = new MockUsdc();
@@ -71,10 +72,10 @@ contract ImpactDnaEscrowTest {
         _deposit(acceptedId, 1_000_000);
         _deposit(lateId, 250_000);
         vm.prank(RELAYER); escrow.reconcileDeposit(acceptedId, true);
+        vm.prank(RELAYER); escrow.reconcileDeposit(lateId, false);
         address[] memory recipients = new address[](1); recipients[0] = RECIPIENT;
         uint256[] memory amounts = new uint256[](1); amounts[0] = 1_000_000;
         vm.prank(RELAYER); escrow.setGrants(EPOCH, recipients, amounts);
-        vm.prank(RELAYER); escrow.reconcileDeposit(lateId, false);
         vm.prank(RECIPIENT); escrow.claim(EPOCH);
         vm.prank(FUNDER); escrow.refundDeposit(lateId);
         require(token.balanceOf(RECIPIENT) == 1_000_000, "claim mismatch");
@@ -105,5 +106,31 @@ contract ImpactDnaEscrowTest {
         require(token.balanceOf(address(this)) == 1_000_000, "recovery mismatch");
         vm.expectRevert(bytes("ImpactDnaEscrow: grants already set"));
         vm.prank(RELAYER); escrow.settleEmptyEpoch(EPOCH);
+    }
+
+    function testInvalidEpochDepositRemainsExactlyRefundable() public {
+        bytes32 id = bytes32(uint256(8));
+        vm.prank(FUNDER); escrow.deposit(UNKNOWN_EPOCH, id, 400_000);
+        require(escrow.pendingDepositCount(UNKNOWN_EPOCH) == 1, "pending deposit not tracked");
+        vm.prank(RELAYER); escrow.reconcileDeposit(id, false);
+        require(escrow.pendingDepositCount(UNKNOWN_EPOCH) == 0, "pending deposit not cleared");
+        vm.prank(FUNDER); escrow.refundDeposit(id);
+        require(token.balanceOf(FUNDER) == 2_000_000, "invalid epoch refund mismatch");
+    }
+
+    function testEmptySettlementWaitsForFailedBaseAcknowledgement() public {
+        bytes32 acceptedId = bytes32(uint256(9));
+        bytes32 unresolvedId = bytes32(uint256(10));
+        _deposit(acceptedId, 1_000_000);
+        vm.prank(RELAYER); escrow.reconcileDeposit(acceptedId, true);
+        _deposit(unresolvedId, 500_000);
+
+        vm.expectRevert(bytes("ImpactDnaEscrow: pending deposits"));
+        vm.prank(RELAYER); escrow.settleEmptyEpoch(EPOCH);
+
+        vm.prank(RELAYER); escrow.reconcileDeposit(unresolvedId, true);
+        vm.prank(RELAYER); escrow.settleEmptyEpoch(EPOCH);
+        escrow.withdrawUnallocated(EPOCH, address(this), 1_500_000);
+        require(token.balanceOf(address(this)) == 1_500_000, "terminal recovery mismatch");
     }
 }

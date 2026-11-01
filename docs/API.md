@@ -57,4 +57,6 @@ These are called by the frontend directly against the deployed contracts — lis
 Relayer-only settlement methods are not public API endpoints: the backend calls
 `setGrants` for non-zero allocations or `settleEmptyEpoch` for a funded closed
 epoch with no eligible recipients, persists the Base transaction hash, and then
-calls GenLayer `mark_grants_relayed`.
+calls GenLayer `mark_grants_relayed`. Both settlement methods reject while the
+epoch has unresolved Base deposits. Deposits whose epoch hash does not resolve
+to a GenLayer epoch are persisted and reconciled as refundable.

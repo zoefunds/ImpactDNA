@@ -53,7 +53,7 @@ const SECTIONS: Array<{ title: string; body: string[]; code?: string }> = [
       "The evaluation ledger is deployed on GenLayer StudioNet and USDC custody is deployed on Base Sepolia. Key GenLayer writes include register_developer, submit_contribution, evaluate_contribution, detect_manipulation, open_epoch, close_epoch, request_appeal and resolve_appeal. Relayer-only writes record deposits and acknowledge allocations and claims. The Base escrow exposes deposit(epochId, depositId, amount), refundDeposit, claim and claimMany; settlement uses setGrants or settleEmptyEpoch.",
     ],
     code: `GenLayer: 0xC7606d65963A7e45a2A5E08B102C73efBB307466
-Escrow:   0x728A280E9E2DD05320B8AbA89Cd7c4E79046Cc07
+Escrow:   0x51c7575D0893D6a5cc98dA5356A8e727502Eb8B0
 USDC:     0x036CbD53842c5426634e7929541eC2318f3dCF7e
 Networks: GenLayer StudioNet + Base Sepolia`,
   },

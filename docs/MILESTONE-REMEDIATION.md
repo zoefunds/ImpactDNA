@@ -77,7 +77,24 @@ The final four edge cases are addressed by:
 Current coordinated contract deployments:
 
 - GenLayer StudioNet: `0xC7606d65963A7e45a2A5E08B102C73efBB307466`
-- Base Sepolia escrow: `0x728A280E9E2DD05320B8AbA89Cd7c4E79046Cc07`
+- Base Sepolia escrow: `0x51c7575D0893D6a5cc98dA5356A8e727502Eb8B0`
 
-Regression evidence: 13 Intelligent Contract tests, 5 Foundry escrow tests,
-7 backend tests, and a successful optimized frontend build.
+Regression evidence: 13 Intelligent Contract tests, 7 Foundry escrow tests,
+8 backend tests, and a successful optimized frontend build.
+
+## Deposit-recoverability follow-up (2026-11-01)
+
+- The deposit scanner now persists every confirmed event with its raw
+  `epoch_hash`. A hash that does not resolve against the complete GenLayer epoch
+  list is sent directly to Base reconciliation as refundable; the cursor may
+  advance only after the durable row exists.
+- Base maintains `pendingDepositCount(epochId)`. Both `setGrants` and
+  `settleEmptyEpoch` reject settlement while the count is non-zero, closing the
+  window where a GenLayer-accepted deposit had not yet received its Base
+  acknowledgement.
+- The backend adds the same settlement barrier from `pending_deposits`, and
+  Base reconciliation retries recognize an acknowledgement that landed before
+  a database update.
+- `testInvalidEpochDepositRemainsExactlyRefundable` and
+  `testEmptySettlementWaitsForFailedBaseAcknowledgement` cover the two stranded
+  deposit sequences. Backend tests cover known/unknown epoch-hash routing.

@@ -14,7 +14,7 @@ are in [`docs/MILESTONE-REMEDIATION.md`](docs/MILESTONE-REMEDIATION.md).
 | Frontend | `https://impactdna.vercel.app` |
 | Backend | `https://impactdna-milestone-api.fly.dev` |
 | GenLayer StudioNet | `0xC7606d65963A7e45a2A5E08B102C73efBB307466` |
-| Base Sepolia escrow | `0x728A280E9E2DD05320B8AbA89Cd7c4E79046Cc07` |
+| Base Sepolia escrow | `0x51c7575D0893D6a5cc98dA5356A8e727502Eb8B0` |
 | Base Sepolia USDC | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
 | Owner / relayer / first curator | `0x0f4CAd4b62DfcEce23a6e88565BFf83C703B28e2` |
 
@@ -35,6 +35,11 @@ Vercel production deployment is Ready.
 - **Deposit lifecycle safety:** Base deposits are uniquely identified and remain
   pending until reconciled as accepted or refundable. Late deposits receive an
   exact refund path, and active accepted collateral cannot be withdrawn.
+- **Unknown epoch recovery:** unmatched epoch hashes are persisted rather than
+  skipped, then reconciled on Base as exactly refundable.
+- **Acknowledgement barrier:** Base tracks unresolved deposit counts and rejects
+  grant or empty settlement until all deposit decisions land. The backend also
+  defers settlement while its durable queue still has a pending acknowledgement.
 - **Zero-allocation terminal outcome:** a funded closed epoch with no eligible
   recipients is finalized through relayer-only `settleEmptyEpoch`. This unlocks
   only its unallocated balance and is covered in both GenLayer and Foundry tests.
@@ -51,8 +56,8 @@ Vercel production deployment is Ready.
 ## Verification
 
 - Intelligent Contract: 13 tests passing.
-- Base escrow: 5 Foundry tests passing.
-- Backend: TypeScript build plus 7 relay/receipt tests passing.
+- Base escrow: 7 Foundry tests passing.
+- Backend: TypeScript build plus 8 relay/receipt tests passing.
 - Frontend: optimized production build passing; only the documented non-fatal
   third-party `ox` dynamic-import warning remains.
 - Production: Fly health check passing, migration `009` applied, Vercel Ready,

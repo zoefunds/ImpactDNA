@@ -32,7 +32,7 @@ import {
   recordDepositOnGenlayer,
   listAllGrants,
 } from "../services/genlayerRelay.js";
-import { grantsForClaim } from "./relayLogic.js";
+import { depositResolution, grantsForClaim, resolveEpochId } from "./relayLogic.js";
 
 const DEPOSITED_BLOCK_KEY = "relay:lastScannedDepositBlock";
 const CLAIMED_BLOCK_KEY = "relay:lastScannedClaimBlock";
@@ -71,21 +71,20 @@ export async function scanDeposits(): Promise<void> {
   const events = await escrow.queryFilter(escrow.filters.Deposited(), fromBlock, toBlock);
   if (events.length) {
     const { items } = await listEpochs();
-    const hashToId = new Map(items.map((e) => [ethers.id(e.id as string), e.id as string]));
     for (const ev of events) {
       if (!("args" in ev) || !ev.args) continue;
       const baseTxHash = ev.transactionHash.toLowerCase();
       const depositId = ev.args.depositId as string;
-      const epochId = hashToId.get(ev.args.epochId as string);
+      const epochHash = ev.args.epochId as string;
+      const epochId = resolveEpochId(items, epochHash, ethers.id);
       if (!epochId) {
-        logger.warn({ escrowEpochHash: ev.args.epochId, baseTxHash }, "deposit event doesn't match any known epoch; skipping");
-        continue;
+        logger.warn({ escrowEpochHash: epochHash, baseTxHash }, "persisting invalid-epoch deposit for exact refund reconciliation");
       }
       await query(
-        `INSERT INTO pending_deposits (base_tx_hash, deposit_id, epoch_id, depositor, amount_usdc, block_number)
-         VALUES ($1, $2, $3, $4, $5, $6)
+        `INSERT INTO pending_deposits (base_tx_hash, deposit_id, epoch_id, epoch_hash, depositor, amount_usdc, block_number)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT (base_tx_hash) DO NOTHING`,
-        [baseTxHash, depositId, epochId, ev.args.from as string, (ev.args.amount as bigint).toString(), ev.blockNumber],
+        [baseTxHash, depositId, epochId, epochHash, ev.args.from as string, (ev.args.amount as bigint).toString(), ev.blockNumber],
       );
     }
   }
@@ -99,7 +98,7 @@ export async function applyPendingDeposits(): Promise<void> {
   const rows = await query<{
     base_tx_hash: string;
     deposit_id: string;
-    epoch_id: string;
+    epoch_id: string | null;
     depositor: string;
     amount_usdc: string;
     attempts: number;
@@ -110,7 +109,10 @@ export async function applyPendingDeposits(): Promise<void> {
   for (const row of rows.rows) {
     try {
       if (!row.deposit_id) throw new Error("legacy deposit lacks a reconciliation id");
-      const applied = await recordDepositOnGenlayer(row.epoch_id, row.depositor, BigInt(row.amount_usdc), row.deposit_id);
+      const resolution = depositResolution(row.epoch_id);
+      const applied = resolution === "record"
+        ? await recordDepositOnGenlayer(row.epoch_id as string, row.depositor, BigInt(row.amount_usdc), row.deposit_id)
+        : { txHash: null, accepted: false };
       const reconciliationTx = await reconcileEscrowDeposit(row.deposit_id, applied.accepted);
       await query(
         `UPDATE pending_deposits SET status = 'applied', applied_tx = $2, reconciliation_tx = $3, updated_at = now() WHERE base_tx_hash = $1`,
@@ -132,6 +134,14 @@ export async function relayClosedEpochGrants(): Promise<void> {
   for (const epoch of items) {
     if (epoch.status !== "closed") continue;
     const epochId = epoch.id as string;
+    const unresolved = await query(
+      "SELECT 1 FROM pending_deposits WHERE epoch_id = $1 AND status = 'pending' LIMIT 1",
+      [epochId],
+    );
+    if (unresolved.rowCount) {
+      logger.info({ epochId }, "settlement deferred while deposit acknowledgements remain unresolved");
+      continue;
+    }
     const pending = await getGrantsPendingRelay(epochId);
     if (pending.length === 0 && (epoch.relayed === true || BigInt(String(epoch.allocated_usdc ?? "0")) > 0n)) continue;
     const prior = await query<{ base_tx_hash: string }>(

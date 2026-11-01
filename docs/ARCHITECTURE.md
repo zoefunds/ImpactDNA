@@ -66,6 +66,14 @@ relayer-only `settleEmptyEpoch`. The relayer then mirrors either terminal state 
 `mark_grants_relayed`. A recipient's own `ImpactDnaEscrow.claim(epochId)`
 call is mirrored back via `mark_grant_claimed` once observed.
 
+Every Base deposit is durable before the scan cursor advances. If its epoch
+hash cannot be resolved against the complete GenLayer epoch list, the row keeps
+the raw hash and is reconciled as refundable without attempting a GenLayer
+write. Base independently counts pending deposits per epoch; neither grant nor
+empty settlement can finalize until that count is zero. The backend applies the
+same barrier using its durable queue, so a temporary Base acknowledgement
+failure cannot race terminal settlement.
+
 Both GenLayer clients distinguish consensus finality from execution success:
 `FINALIZED` is necessary but not sufficient. At least one leader receipt must
 report `execution_result=SUCCESS` with `result.status=return`; otherwise the
@@ -87,7 +95,8 @@ leader and validator; `[TRANSIENT]` network/5xx agree if both transient;
 ## Base Sepolia escrow (`contracts/base/ImpactDnaEscrow.sol`)
 
 No external dependencies (no OpenZeppelin) — a `Pool` struct per epoch id
-(`deposited`, `accepted`, `allocated`, `grantsSet`), exact deposit records
+(`deposited`, `accepted`, `allocated`, `grantsSet`), exact deposit records,
+and a `pendingDepositCount` per epoch
 reconciled as accepted or refundable, and `claimable`/immutable `granted`
 mappings credited only by the relayer's one-shot `setGrants` call. Empty funded
 rounds have an explicit one-shot `settleEmptyEpoch` state, which unlocks only

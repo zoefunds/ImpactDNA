@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { grantsForClaim, type GrantRecord } from "../jobs/relayLogic.js";
+import { depositResolution, grantsForClaim, resolveEpochId, type GrantRecord } from "../jobs/relayLogic.js";
+import { ethers } from "ethers";
 
 const grants: GrantRecord[] = [
   { id: "g-1", epoch: "e-1", wallet: "0xAbC", amount_usdc: "40", claimed: false },
@@ -22,4 +23,11 @@ test("retry includes already-acknowledged grants only from the same Base tx", ()
   partial[0].claim_tx_hash = "0xtx";
   assert.equal(grantsForClaim(partial, "e-1", "0xabc", 100n, "0xtx").length, 2);
   assert.deepEqual(grantsForClaim(partial, "e-1", "0xabc", 100n, "0xother"), []);
+});
+
+test("resolves known epoch hashes and routes unknown hashes to exact refund", () => {
+  const epochs = [{ id: "e-1" }, { id: "e-2" }];
+  assert.equal(resolveEpochId(epochs, ethers.id("e-2"), ethers.id), "e-2");
+  assert.equal(depositResolution(resolveEpochId(epochs, ethers.id("e-404"), ethers.id)), "refund");
+  assert.equal(depositResolution("e-1"), "record");
 });

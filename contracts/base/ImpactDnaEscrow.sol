@@ -50,6 +50,7 @@ contract ImpactDnaEscrow {
     mapping(bytes32 => mapping(address => uint256)) public granted;   // immutable assigned total for reconciliation
     mapping(address => uint256) public totalClaimable;               // recipient => USDC owed across ALL epochs
     mapping(bytes32 => DepositRecord) public deposits;                // client-generated unique deposit id => record
+    mapping(bytes32 => uint256) public pendingDepositCount;            // epochId => deposits awaiting relayer decision
 
     bool private _locked; // reentrancy guard
 
@@ -108,6 +109,7 @@ contract ImpactDnaEscrow {
         bool ok = usdc.transferFrom(msg.sender, address(this), amount);
         require(ok, "ImpactDnaEscrow: USDC transferFrom failed");
         pools[epochId].deposited += amount;
+        pendingDepositCount[epochId] += 1;
         deposits[depositId] = DepositRecord(epochId, msg.sender, amount, 1);
         emit Deposited(epochId, depositId, msg.sender, amount);
     }
@@ -117,6 +119,7 @@ contract ImpactDnaEscrow {
     function reconcileDeposit(bytes32 depositId, bool accepted) external onlyRelayer {
         DepositRecord storage item = deposits[depositId];
         require(item.status == 1, "ImpactDnaEscrow: deposit not pending");
+        pendingDepositCount[item.epochId] -= 1;
         if (accepted) {
             require(!pools[item.epochId].grantsSet, "ImpactDnaEscrow: epoch settled");
             item.status = 2;
@@ -155,6 +158,7 @@ contract ImpactDnaEscrow {
 
         Pool storage pool = pools[epochId];
         require(!pool.grantsSet, "ImpactDnaEscrow: grants already set");
+        require(pendingDepositCount[epochId] == 0, "ImpactDnaEscrow: pending deposits");
 
         uint256 total = 0;
         for (uint256 i = 0; i < amounts.length; i++) {
@@ -185,6 +189,7 @@ contract ImpactDnaEscrow {
     function settleEmptyEpoch(bytes32 epochId) external onlyRelayer {
         Pool storage pool = pools[epochId];
         require(!pool.grantsSet, "ImpactDnaEscrow: grants already set");
+        require(pendingDepositCount[epochId] == 0, "ImpactDnaEscrow: pending deposits");
         require(pool.accepted > 0, "ImpactDnaEscrow: empty pool");
         pool.grantsSet = true;
         emit EmptyEpochSettled(epochId, pool.accepted);

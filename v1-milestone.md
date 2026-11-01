@@ -124,7 +124,7 @@ relaunch — this is a fresh start, not a migration.
 | Chain | Contract | Address |
 |---|---|---|
 | GenLayer StudioNet (61999) | ImpactDNA | `0xC7606d65963A7e45a2A5E08B102C73efBB307466` |
-| Base Sepolia (84532) | ImpactDnaEscrow | `0x728A280E9E2DD05320B8AbA89Cd7c4E79046Cc07` |
+| Base Sepolia (84532) | ImpactDnaEscrow | `0x51c7575D0893D6a5cc98dA5356A8e727502Eb8B0` |
 | Base Sepolia (84532) | USDC | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
 
 ## Current verification status
@@ -132,9 +132,9 @@ relaunch — this is a fresh start, not a migration.
 - GenLayer contract: 13/13 unit tests passing
   (covers the full open-epoch → deposit → submit → evaluate → close →
   relay → claim lifecycle, including permissionless-epoch access control).
-- Base escrow: 5/5 Foundry regression tests pass, including a funded epoch
-  with zero eligible recipients.
-- Backend: TypeScript build and 7/7 relay/receipt tests pass; migrations `001`–`009`
+- Base escrow: 7/7 Foundry regression tests pass, including invalid-epoch
+  refunds and settlement deferral while deposit acknowledgements are pending.
+- Backend: TypeScript build and 8/8 relay/receipt tests pass; migrations `001`–`010`
   are applied in production. A complete Base deposit → GenLayer record →
   Base allocation → claim → GenLayer acknowledgement run is documented.
 - Frontend: production builds clean; wallet-connect modal, funding page

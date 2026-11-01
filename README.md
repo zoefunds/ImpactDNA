@@ -13,7 +13,7 @@ ImpactDNA flips the traditional grants model: instead of funding proposals befor
 | **Web app** | [impactdna.vercel.app](https://impactdna.vercel.app) |
 | **REST API** (24/7, health-checked) | [impactdna-milestone-api.fly.dev](https://impactdna-milestone-api.fly.dev) |
 | **GenLayer Intelligent Contract** | [`0xC7606d65963A7e45a2A5E08B102C73efBB307466`](https://studio.genlayer.com) — GenLayer StudioNet (gasless) |
-| **Base Sepolia escrow** | [`0x728A280E9E2DD05320B8AbA89Cd7c4E79046Cc07`](https://sepolia.basescan.org/address/0x728A280E9E2DD05320B8AbA89Cd7c4E79046Cc07) — `ImpactDnaEscrow.sol` |
+| **Base Sepolia escrow** | [`0x51c7575D0893D6a5cc98dA5356A8e727502Eb8B0`](https://sepolia.basescan.org/address/0x51c7575D0893D6a5cc98dA5356A8e727502Eb8B0) — `ImpactDnaEscrow.sol` |
 | **USDC (Base Sepolia)** | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
 | **Owner / relayer / first curator** | `0x0f4CAd4b62DfcEce23a6e88565BFf83C703B28e2` (rotated 2026-11-01) |
 
@@ -100,7 +100,9 @@ An off-chain AI could score repositories, but there would be no way to verify th
 GenLayer's own EVM-compatibility layer can move its native GEN token, but not an ERC20 on another chain — so real USDC custody lives in `ImpactDnaEscrow.sol` on Base Sepolia, and a single backend relayer bridges the two chains (the same pattern used by this project's sibling `meme-olympics` and `Event-Weaver` builds):
 
 - **Deposits**: anyone calls `ImpactDnaEscrow.deposit(epochId, depositId, amount)` (standard ERC20 approve + deposit). The relayer resolves the epoch and calls `record_deposit(epoch_id, depositor, amount, deposit_id)`, then reconciles the same exact Base deposit as accepted or refundable. This closes the cross-chain epoch-close race without stranding funds.
+- **Unknown epochs**: every confirmed deposit event is persisted even when its epoch hash does not resolve to a GenLayer epoch. The relayer marks that deposit refundable instead of advancing the scan cursor and losing it.
 - **Settlement relay**: once a curator (or the epoch's own opener) closes an epoch, the relayer pushes non-zero grants through `setGrants(...)`, or calls `settleEmptyEpoch(...)` when a funded round has no eligible recipients. The original Base transaction hash is persisted before the GenLayer acknowledgement, so partial failures reconcile without resubmitting an already-complete settlement.
+- **No settlement over pending acknowledgements**: Base counts unresolved deposits per epoch and rejects both `setGrants` and `settleEmptyEpoch` until every deposit is accepted or made refundable. The backend independently defers settlement while its durable deposit queue has pending rows.
 - **Claims**: a grant recipient calls `ImpactDnaEscrow.claim(epochId)` directly with their own wallet — the escrow holds the real USDC and pays out itself; durable relayer event rows mirror every `Claimed` log against complete grant records so failures and multi-claim transactions are retryable.
 - **Execution confirmation**: both browser and backend GenLayer clients require finality plus a successful leader return. A transaction that reaches `FINALIZED` with an execution error is rejected and remains retryable.
 - **No custodial keys anywhere in this path.** Deposits and claims are signed by the user's own connected wallet; only the relayer's own bridging calls (`record_deposit`, `mark_grants_relayed`, `mark_grant_claimed`) use a dedicated backend key, which must be set as the contract's `relayer` (`set_relayer`) on GenLayer and the escrow's `relayer` on Base Sepolia.

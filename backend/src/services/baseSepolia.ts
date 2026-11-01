@@ -139,6 +139,14 @@ export async function settleEmptyEscrowEpoch(epochId: string, knownTxHash?: stri
 
 export async function reconcileEscrowDeposit(depositId: string, accepted: boolean): Promise<string> {
   const contract = getRelayerContract();
+  const existing = await contract.deposits(depositId);
+  const status = Number(existing.status ?? existing[3]);
+  if (status !== 1) {
+    if ((accepted && status === 2) || (!accepted && (status === 3 || status === 4))) {
+      return accepted ? "already-reconciled:accepted" : "already-reconciled:refundable";
+    }
+    throw new Error(`deposit reconciliation state mismatch for ${depositId}: status ${status}`);
+  }
   const tx = await contract.reconcileDeposit(depositId, accepted);
   const receipt = await tx.wait();
   if (!receipt || receipt.status !== 1) throw new Error(`deposit reconciliation failed for ${depositId}`);

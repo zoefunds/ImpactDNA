@@ -21,7 +21,7 @@ genlayer write <ADDR> open_epoch --args "Genesis Round"
 
 ## 2. Base Sepolia escrow (`ImpactDnaEscrow.sol`)
 
-Deployed at `0x728A280E9E2DD05320B8AbA89Cd7c4E79046Cc07` (USDC `0x036CbD53842c5426634e7929541eC2318f3dCF7e`, relayer/owner `0x0f4CAd4b62DfcEce23a6e88565BFf83C703B28e2`).
+Deployed at `0x51c7575D0893D6a5cc98dA5356A8e727502Eb8B0` (USDC `0x036CbD53842c5426634e7929541eC2318f3dCF7e`, relayer/owner `0x0f4CAd4b62DfcEce23a6e88565BFf83C703B28e2`).
 
 To redeploy:
 ```bash
@@ -54,7 +54,7 @@ fly secrets set \
   BASE_SEPOLIA_RPC_URL="https://sepolia.base.org" \
   BASE_SEPOLIA_RELAYER_PRIVATE_KEY="0x..." \
   USDC_CONTRACT_ADDRESS="0x036CbD53842c5426634e7929541eC2318f3dCF7e" \
-  IMPACT_DNA_ESCROW_ADDRESS="0x728A280E9E2DD05320B8AbA89Cd7c4E79046Cc07" \
+  IMPACT_DNA_ESCROW_ADDRESS="0x51c7575D0893D6a5cc98dA5356A8e727502Eb8B0" \
   BREVO_API_KEY="xkeysib-…" \
   BREVO_SENDER_EMAIL="preciousmofeoluwa@gmail.com" \
   GITHUB_CLIENT_ID="…" \
@@ -77,9 +77,9 @@ deploying the escrow.
 24/7 guarantees are in `fly.toml`: `auto_stop_machines="off"`,
 `min_machines_running=1`, restart policy `always`, health checks on `/health`.
 Migrations run automatically at boot.
-The current production database has migrations `001` through `009` applied;
-`009_epoch_settlements.sql` persists Base settlement hashes before GenLayer
-acknowledgement.
+The current production database has migrations `001` through `010` applied.
+Migration `009` persists Base settlement hashes; migration `010` preserves
+unrecognized epoch deposits so they can be reconciled as refundable.
 
 ### GitHub OAuth App (optional — developer identity linking only)
 
@@ -109,7 +109,7 @@ vercel link
 vercel env add NEXT_PUBLIC_API_URL production                       # https://impactdna-milestone-api.fly.dev
 vercel env add NEXT_PUBLIC_GENLAYER_CONTRACT_ADDRESS production     # 0xC7606d65963A7e45a2A5E08B102C73efBB307466
 vercel env add NEXT_PUBLIC_USDC_CONTRACT_ADDRESS production         # 0x036CbD53842c5426634e7929541eC2318f3dCF7e
-vercel env add NEXT_PUBLIC_IMPACT_DNA_ESCROW_ADDRESS production     # 0x728A280E9E2DD05320B8AbA89Cd7c4E79046Cc07
+vercel env add NEXT_PUBLIC_IMPACT_DNA_ESCROW_ADDRESS production     # 0x51c7575D0893D6a5cc98dA5356A8e727502Eb8B0
 vercel --prod
 ```
 
@@ -141,7 +141,7 @@ on that flag.
 ## Current production verification
 
 - Fly app `impactdna-milestone-api`: one started machine, health check passing.
-- Migration `009_epoch_settlements.sql`: applied at production startup on 2026-11-01.
+- Migrations through `010_unknown_epoch_deposits.sql`: applied at production startup on 2026-11-01.
 - Vercel deployment: production Ready and aliased to `https://impactdna.vercel.app`.
 - Live backend configuration resolves both operator and relayer keys to
   `0x0f4CAd4b62DfcEce23a6e88565BFf83C703B28e2` without exposing the keys.
