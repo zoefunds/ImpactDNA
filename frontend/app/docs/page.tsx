@@ -26,7 +26,7 @@ const SECTIONS: Array<{ title: string; body: string[]; code?: string }> = [
     mine = refetch_and_rescore()          # independent evidence
     if leader.fork != mine.fork:           return False
     if leader.owner_match != mine.owner_match: return False
-    if leader.eligible != mine.eligible:   return False  # narrow threshold corridor allowed
+    if leader.eligible != mine.eligible:   return False
     return buckets_agree(leader.score, mine.score)`,
   },
   {
@@ -38,19 +38,19 @@ const SECTIONS: Array<{ title: string; body: string[]; code?: string }> = [
   {
     title: "Funding mathematics",
     body: [
-      "When an epoch closes, every eligible, unflagged contribution receives pool × weight ÷ total_weight where weight = score². The quadratic emphasis rewards high-impact work disproportionately while still funding solid mid-tier contributions. Unallocated remainder stays in the closed Base escrow pool and can be withdrawn only after settlement; active accepted collateral cannot be withdrawn. This settlement step is pure integer math — no LLM, no web — so consensus on it is trivial.",
+      "When an epoch closes, every eligible, unflagged contribution receives pool × weight ÷ total_weight where weight = score². The quadratic emphasis rewards high-impact work disproportionately while still funding solid mid-tier contributions. Unallocated remainder stays in the closed Base escrow pool and can be withdrawn only after settlement; a funded epoch with no eligible recipients reaches that terminal state through relayer-only settleEmptyEpoch. Active accepted collateral cannot be withdrawn. This settlement step is pure integer math — no LLM, no web — so consensus on it is trivial.",
     ],
   },
   {
     title: "Wallets & security",
     body: [
-      "Your connected wallet is your identity and signs every user action; the backend never stores or exports its private key. GitHub usernames cannot be squatted because registration requires an OAuth-created, wallet-bound public proof gist. Base deposits remain pending until the relayer reconciles GenLayer's decision, and late deposits become exactly refundable. Rate limiting, role checks, audit logging, durable relay queues, and strict input validation protect the API. StudioNet is gasless, while Base Sepolia actions require test ETH for gas.",
+      "Your connected wallet is your identity and signs every user action; the backend never stores or exports its private key. GitHub usernames cannot be squatted because registration requires an OAuth-created, wallet-bound public proof gist. Base deposits remain pending until the relayer reconciles GenLayer's decision, and late deposits become exactly refundable. GenLayer writes count as successful only when a finalized leader execution returns successfully; finalized execution errors are rejected. Rate limiting, role checks, audit logging, durable relay queues, and strict input validation protect the API. StudioNet is gasless, while Base Sepolia actions require test ETH for gas.",
     ],
   },
   {
     title: "Contract reference",
     body: [
-      "The evaluation ledger is deployed on GenLayer StudioNet and USDC custody is deployed on Base Sepolia. Key GenLayer writes include register_developer, submit_contribution, evaluate_contribution, detect_manipulation, open_epoch, close_epoch, request_appeal and resolve_appeal. Relayer-only writes record deposits and acknowledge allocations and claims. The Base escrow exposes deposit(epochId, depositId, amount), refundDeposit, claim and claimMany.",
+      "The evaluation ledger is deployed on GenLayer StudioNet and USDC custody is deployed on Base Sepolia. Key GenLayer writes include register_developer, submit_contribution, evaluate_contribution, detect_manipulation, open_epoch, close_epoch, request_appeal and resolve_appeal. Relayer-only writes record deposits and acknowledge allocations and claims. The Base escrow exposes deposit(epochId, depositId, amount), refundDeposit, claim and claimMany; settlement uses setGrants or settleEmptyEpoch.",
     ],
     code: `GenLayer: 0xC7606d65963A7e45a2A5E08B102C73efBB307466
 Escrow:   0x728A280E9E2DD05320B8AbA89Cd7c4E79046Cc07

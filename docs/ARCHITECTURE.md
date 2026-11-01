@@ -66,6 +66,11 @@ relayer-only `settleEmptyEpoch`. The relayer then mirrors either terminal state 
 `mark_grants_relayed`. A recipient's own `ImpactDnaEscrow.claim(epochId)`
 call is mirrored back via `mark_grant_claimed` once observed.
 
+Both GenLayer clients distinguish consensus finality from execution success:
+`FINALIZED` is necessary but not sufficient. At least one leader receipt must
+report `execution_result=SUCCESS` with `result.status=return`; otherwise the
+write is treated as failed and no relay acknowledgement is committed.
+
 ### Anti-gaming layers
 - Deterministic gates on top of LLM output: forks get `originality=0` and a
   30-point cap; non-owned repos are capped below the eligibility gate.

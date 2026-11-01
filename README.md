@@ -17,7 +17,7 @@ ImpactDNA flips the traditional grants model: instead of funding proposals befor
 | **USDC (Base Sepolia)** | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
 | **Owner / relayer / first curator** | `0x0f4CAd4b62DfcEce23a6e88565BFf83C703B28e2` (rotated 2026-11-01) |
 
-The verified Base Sepolia deposit-to-claim transaction chain is documented in [`docs/MILESTONE-REMEDIATION.md`](docs/MILESTONE-REMEDIATION.md#live-base-sepolia-deposit-to-claim-evidence).
+The archived Base Sepolia deposit-to-claim transaction chain and current remediation evidence are documented in [`docs/MILESTONE-REMEDIATION.md`](docs/MILESTONE-REMEDIATION.md).
 
 Constructor: `platform_name="ImpactDNA"`, `min_eligible_score=60` (owner-adjustable).
 
@@ -102,6 +102,7 @@ GenLayer's own EVM-compatibility layer can move its native GEN token, but not an
 - **Deposits**: anyone calls `ImpactDnaEscrow.deposit(epochId, depositId, amount)` (standard ERC20 approve + deposit). The relayer resolves the epoch and calls `record_deposit(epoch_id, depositor, amount, deposit_id)`, then reconciles the same exact Base deposit as accepted or refundable. This closes the cross-chain epoch-close race without stranding funds.
 - **Settlement relay**: once a curator (or the epoch's own opener) closes an epoch, the relayer pushes non-zero grants through `setGrants(...)`, or calls `settleEmptyEpoch(...)` when a funded round has no eligible recipients. The original Base transaction hash is persisted before the GenLayer acknowledgement, so partial failures reconcile without resubmitting an already-complete settlement.
 - **Claims**: a grant recipient calls `ImpactDnaEscrow.claim(epochId)` directly with their own wallet — the escrow holds the real USDC and pays out itself; durable relayer event rows mirror every `Claimed` log against complete grant records so failures and multi-claim transactions are retryable.
+- **Execution confirmation**: both browser and backend GenLayer clients require finality plus a successful leader return. A transaction that reaches `FINALIZED` with an execution error is rejected and remains retryable.
 - **No custodial keys anywhere in this path.** Deposits and claims are signed by the user's own connected wallet; only the relayer's own bridging calls (`record_deposit`, `mark_grants_relayed`, `mark_grant_claimed`) use a dedicated backend key, which must be set as the contract's `relayer` (`set_relayer`) on GenLayer and the escrow's `relayer` on Base Sepolia.
 
 ## Epochs are permissionless
@@ -211,8 +212,8 @@ genlayer write 0xC7606d65963A7e45a2A5E08B102C73efBB307466 close_epoch --args e-1
 genlayer write 0xC7606d65963A7e45a2A5E08B102C73efBB307466 resolve_appeal --args a-1
 genlayer write 0xC7606d65963A7e45a2A5E08B102C73efBB307466 detect_manipulation --args c-1
 
-# Adjust the eligibility gate (owner only)
-genlayer write 0xC7606d65963A7e45a2A5E08B102C73efBB307466 set_min_eligible_score --args 40
+# Adjust the eligibility gate (owner only; current value is 60)
+genlayer write 0xC7606d65963A7e45a2A5E08B102C73efBB307466 set_min_eligible_score --args 60
 ```
 
 ## Current stage & path forward
@@ -231,7 +232,7 @@ Concrete next steps:
 - [Architecture](docs/ARCHITECTURE.md) — system design, data flow, consensus model
 - [Deployment](docs/DEPLOYMENT.md) — step-by-step for contracts, Fly.io, Vercel
 - [API Reference](docs/API.md) — all endpoints, auth, request/response schemas
-- [review.md](review.md) — reserved-vs-treasury and score-consistency fix, with tests (pre-relaunch)
+- [review.md](review.md) — current steward-finding closure and verification summary
 
 ## License
 

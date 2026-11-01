@@ -6,12 +6,12 @@ Last verified: 2026-11-01. This file records current operational facts; historic
 
 - Frontend: `https://impactdna.vercel.app`
 - Backend: `https://impactdna-milestone-api.fly.dev` (`impactdna-milestone-api`, Fly region `iad`)
-- Database: `impactdna-milestone-db`; migrations `001` through `008` applied
+- Database: `impactdna-milestone-db`; migrations `001` through `009` applied
 - GenLayer StudioNet contract: `0xC7606d65963A7e45a2A5E08B102C73efBB307466`
 - Base Sepolia escrow: `0x728A280E9E2DD05320B8AbA89Cd7c4E79046Cc07`
 - Base Sepolia USDC: `0x036CbD53842c5426634e7929541eC2318f3dCF7e`
 - Owner, relayer, and first curator: `0x0f4CAd4b62DfcEce23a6e88565BFf83C703B28e2` (rotated 2026-11-01)
-- Eligibility threshold: `40`
+- Eligibility threshold: `60`
 
 Both chains are testnets. The Base escrow is the sole custodian of USDC; GenLayer is the authoritative evaluation and grant ledger.
 
@@ -23,8 +23,9 @@ Both chains are testnets. The Base escrow is the sole custodian of USDC; GenLaye
 - Every Base deposit has a unique `depositId`. It remains pending until GenLayer accepts or rejects it; rejected or late deposits become exactly refundable.
 - Accepted collateral cannot be withdrawn while active. Grants can only be allocated from accepted collateral.
 - Relay scans are durable: deposits and claims are persisted in Postgres before cursors advance. Failed events remain retryable, and multi-grant claims in one transaction are supported.
-- Settlement recovery verifies an existing Base allocation per wallet before retrying only the missing GenLayer acknowledgement.
-- Client-side writes require successful transaction receipts, not transaction submission alone.
+- Funded epochs with no eligible recipients terminate through relayer-only `settleEmptyEpoch`; collateral remains locked until that settlement and only the unallocated balance can then be recovered.
+- Settlement recovery persists the original Base transaction hash and verifies an existing allocation per wallet before retrying only the missing GenLayer acknowledgement. Its fallback event lookup is bounded to 200 blocks.
+- Backend and browser GenLayer writes require `FINALIZED`, a successful leader execution, and `result.status=return`; finalized execution errors are rejected.
 
 ## Operations
 
@@ -36,8 +37,9 @@ Both chains are testnets. The Base escrow is the sole custodian of USDC; GenLaye
 
 ## Verification
 
-- Python Intelligent Contract tests: 12 passing.
-- Solidity escrow regression tests: 4 passing.
-- Backend relay/receipt tests: 6 passing.
+- Python Intelligent Contract tests: 13 passing.
+- Solidity escrow regression tests: 5 passing.
+- Backend relay/receipt tests: 7 passing.
 - Frontend production build: passing (third-party `ox` dynamic-import warnings remain non-fatal).
 - A complete 1-USDC Base Sepolia deposit-to-claim run is recorded in `docs/MILESTONE-REMEDIATION.md`.
+- Fly production is healthy with migration `009` applied; Vercel production is Ready and exposes the coordinated contract addresses.

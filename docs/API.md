@@ -4,6 +4,8 @@ Base URL: `https://impactdna-milestone-api.fly.dev` (local: `http://localhost:80
 
 Auth: `Authorization: Bearer <accessToken>` unless marked public.
 All bodies are JSON. Errors: `{ "error": "message" }` with 4xx/5xx status.
+Client-side and relayer GenLayer writes return success only after a finalized
+leader execution finishes with `result.status=return`.
 
 ## Health
 - `GET /health` — liveness (public).
@@ -51,3 +53,8 @@ Opening/closing epochs, depositing, and claiming are **not** here — those are 
 These are called by the frontend directly against the deployed contracts — listed here for completeness:
 - **GenLayer** (`genlayer-js`, connected wallet): `register_developer(github_username, display_name, proof_gist_id)` (wallet-bound GitHub proof), `verify_developer` (legacy unverified profiles), `submit_contribution(repo, category, description, epoch_id)`, `evaluate_contribution`, `request_appeal`, `open_epoch(label)`, `close_epoch(epoch_id)`.
 - **Base Sepolia `ImpactDnaEscrow`** (wagmi, connected wallet): `deposit(epochId, depositId, amount)` (after an ERC20 `approve`), `refundDeposit(depositId)`, `claim(epochId)`, and `claimMany(epochIds)`.
+
+Relayer-only settlement methods are not public API endpoints: the backend calls
+`setGrants` for non-zero allocations or `settleEmptyEpoch` for a funded closed
+epoch with no eligible recipients, persists the Base transaction hash, and then
+calls GenLayer `mark_grants_relayed`.

@@ -127,24 +127,25 @@ relaunch — this is a fresh start, not a migration.
 | Base Sepolia (84532) | ImpactDnaEscrow | `0x728A280E9E2DD05320B8AbA89Cd7c4E79046Cc07` |
 | Base Sepolia (84532) | USDC | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
 
-## Verification performed
+## Current verification status
 
-- GenLayer contract: 12/12 unit tests passing
+- GenLayer contract: 13/13 unit tests passing
   (covers the full open-epoch → deposit → submit → evaluate → close →
   relay → claim lifecycle, including permissionless-epoch access control).
-- Backend: TypeScript build and 6/6 relay tests pass; migrations `001`–`008`
+- Base escrow: 5/5 Foundry regression tests pass, including a funded epoch
+  with zero eligible recipients.
+- Backend: TypeScript build and 7/7 relay/receipt tests pass; migrations `001`–`009`
   are applied in production. A complete Base deposit → GenLayer record →
   Base allocation → claim → GenLayer acknowledgement run is documented.
 - Frontend: production builds clean; wallet-connect modal, funding page
   (epoch open/deposit), and dashboard verified live in-browser against
   the production deployment.
 
-## Known follow-ups
+## Remaining product-stage follow-up
 
-- The relayer/operator key currently in use was shared in a development
-  chat session and must be treated as already compromised — rotate to a
-  freshly generated key before any real (non-testnet) value passes
-  through the escrow.
+- The exposed development operator identity was retired on 2026-11-01. The
+  coordinated contracts and production backend now use
+  `0x0f4CAd4b62DfcEce23a6e88565BFf83C703B28e2`.
 - Both GenLayer StudioNet and Base Sepolia are testnets; mainnet
   deployment is a future step once a funding round has run with real
   external participants.

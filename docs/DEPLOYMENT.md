@@ -9,7 +9,7 @@ To redeploy (e.g. after changes):
 2. Upload `contracts/impact_dna.py`.
 3. Constructor: `platform_name` (string), `min_eligible_score` (int; current deployment uses **60**).
 4. Deploy on **StudioNet** (gasless — 0 GEN balance is fine).
-5. Point the relayer at itself: `genlayer write <ADDR> set_relayer --args <relayer_address>` (the deployer is both owner and first curator by default, but `relayer` needs setting explicitly if it should differ from the deployer).
+5. Set the backend relayer: `genlayer write <ADDR> set_relayer --args <relayer_address>` (the deployer starts as owner, first curator, and relayer).
 6. Put the new address in backend secrets (`GENLAYER_CONTRACT_ADDRESS`) and frontend env (`NEXT_PUBLIC_GENLAYER_CONTRACT_ADDRESS`).
 
 Lint before any redeploy: `pip install genvm-linter && genvm-lint check contracts/impact_dna.py`.
@@ -77,6 +77,9 @@ deploying the escrow.
 24/7 guarantees are in `fly.toml`: `auto_stop_machines="off"`,
 `min_machines_running=1`, restart policy `always`, health checks on `/health`.
 Migrations run automatically at boot.
+The current production database has migrations `001` through `009` applied;
+`009_epoch_settlements.sql` persists Base settlement hashes before GenLayer
+acknowledgement.
 
 ### GitHub OAuth App (optional — developer identity linking only)
 
@@ -95,6 +98,8 @@ Once `BASE_SEPOLIA_RELAYER_PRIVATE_KEY` and `IMPACT_DNA_ESCROW_ADDRESS` are
 both set, `src/jobs/relay.ts` starts automatically at boot — no separate
 process to deploy. Check `fly logs` for "Base Sepolia relay disabled" to
 confirm it's picked up the config; its absence means the relay loop is active.
+The relayer handles both non-empty `setGrants` settlements and zero-recipient
+`settleEmptyEpoch` settlements.
 
 ## 4. Frontend → Vercel
 
@@ -132,3 +137,11 @@ on that flag.
   `GENLAYER_CONTRACT_ADDRESS` / `IMPACT_DNA_ESCROW_ADDRESS` everywhere they're
   configured (backend secrets, frontend env, and each other via
   `set_relayer`/the escrow's constructor argument).
+
+## Current production verification
+
+- Fly app `impactdna-milestone-api`: one started machine, health check passing.
+- Migration `009_epoch_settlements.sql`: applied at production startup on 2026-11-01.
+- Vercel deployment: production Ready and aliased to `https://impactdna.vercel.app`.
+- Live backend configuration resolves both operator and relayer keys to
+  `0x0f4CAd4b62DfcEce23a6e88565BFf83C703B28e2` without exposing the keys.

@@ -21,22 +21,22 @@ The end-to-end ledger scenario is `test_full_deposit_to_claim_lifecycle`: it ope
 - Score consistency: deterministic caps reduce dimension values themselves, then derive the total and bucket. Parametrized fork/non-owner tests cover caps and the existing bucket tests cover threshold boundaries.
 - Deposit safety: every Base deposit has a unique `depositId` and remains pending until the relayer records GenLayer's accepted/rejected outcome. Rejected late deposits are exactly refundable. Active collateral cannot be owner-withdrawn, and only accepted deposits back grants.
 - Claim relay: confirmed claim logs are persisted before the scan cursor advances. Matching uses complete grant history, supports multiple grants in one Base claim event, and uses a unique event/grant id for idempotent acknowledgements.
-- Settlement recovery: when Base already has grants, the relayer verifies total allocation and immutable per-wallet assigned amounts, finds the original `GrantsSet` transaction, and only retries the missing GenLayer acknowledgement.
-- Transaction confirmation: Base writes require successful receipts and GenLayer writes wait for `FINALIZED`, rejecting consensus errors.
+- Settlement recovery: Base settlement hashes are stored in `epoch_settlements`. When Base is already settled, the relayer verifies total allocation and immutable per-wallet assigned amounts, then retries only the missing GenLayer acknowledgement; fallback event lookup is limited to 200 blocks.
+- Transaction confirmation: Base writes require successful receipts. Backend and browser GenLayer writes require `FINALIZED`, `execution_result=SUCCESS`, and `result.status=return`; finalized execution errors are rejected.
 
-## Deployment order
+## Coordinated deployment status
 
-These are protocol interface changes and require coordinated redeployment:
+The coordinated redeployment was completed on 2026-11-01 in this order:
 
 1. Deploy the updated Base escrow and set its relayer.
 2. Deploy the updated Intelligent Contract and set the same relayer identity.
-3. Apply backend migrations `007`, `008`, and `009`, then deploy the backend with both new addresses.
-4. Deploy the frontend with the new escrow and Intelligent Contract addresses.
+3. Apply backend migrations `007`, `008`, and `009`, then deploy the backend with both new addresses. Production logs confirm `009_epoch_settlements.sql` applied.
+4. Deploy the frontend with the new escrow and Intelligent Contract addresses. The Vercel production deployment is Ready and aliased to `impactdna.vercel.app`.
 5. Reconnect GitHub accounts created before this milestone so OAuth can create their wallet-proof gist.
 
-## Live Base Sepolia deposit-to-claim evidence
+## Archived Base Sepolia deposit-to-claim evidence
 
-Completed on 2026-11-01 against the milestone deployments:
+Completed on 2026-11-01 against the superseded remediation-demonstration deployments. These addresses are retained only so the transaction chain remains reproducible; the current coordinated addresses are listed below.
 
 - Historical GenLayer StudioNet contract: `0x18de100d155851cb179a6dF17f301C158aDed0AC`
 - Historical Base Sepolia escrow: `0xB5777c54047DF43024650197B560A227e35f25B8`
