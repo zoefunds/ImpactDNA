@@ -96,12 +96,12 @@ leader and validator; `[TRANSIENT]` network/5xx agree if both transient;
 
 No external dependencies (no OpenZeppelin) — a `Pool` struct per epoch id
 (`deposited`, `accepted`, `allocated`, `grantsSet`), exact deposit records,
-and a `pendingDepositCount` per epoch
-reconciled as accepted or refundable, and `claimable`/immutable `granted`
-mappings credited only by the relayer's one-shot `setGrants` call. Empty funded
-rounds have an explicit one-shot `settleEmptyEpoch` state, which unlocks only
-their unallocated balance. The `claim`/`claimMany`
-self-serve pull pattern with a reentrancy guard. Owner/relayer are
+and a `pendingDepositCount` per epoch. Each pending deposit is reconciled as
+accepted or refundable before settlement. `claimable` and immutable `granted`
+mappings are credited only by the relayer's one-shot `setGrants` call. Empty
+funded rounds have an explicit one-shot `settleEmptyEpoch` state, which unlocks
+only their unallocated balance. `claim`/`claimMany` use a self-serve pull
+pattern with a reentrancy guard. Owner and relayer roles are
 independently settable (`transferOwnership`/`setRelayer`); an owner-only
 `withdrawUnallocated` is disabled while an epoch is active and can recover
 accepted rounding dust only after settlement; it cannot touch pending,
@@ -144,9 +144,10 @@ Node 20, TypeScript strict, Express.
 github_username, role), `refresh_tokens`, `auth_nonces` (SIWE challenges),
 `contribution_mirror` (fast reads; chain is canonical), `pending_deposits`,
 `pending_claims`, `relay_sync_state`, and `epoch_settlements` (durable relay
-events/retries/cursors and allocation hashes), `notification_log`,
-`audit_events`, `schema_migrations`. Forward-only SQL migrations applied
-transactionally at boot.
+events/retries/cursors and allocation hashes). `pending_deposits` also retains
+the raw Base `epoch_hash` when no GenLayer epoch resolves. Other tables are
+`notification_log`, `audit_events`, and `schema_migrations`. Forward-only SQL
+migrations are applied transactionally at boot.
 
 ## Frontend (`frontend/`)
 

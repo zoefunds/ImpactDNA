@@ -19,8 +19,8 @@ are in [`docs/MILESTONE-REMEDIATION.md`](docs/MILESTONE-REMEDIATION.md).
 | Owner / relayer / first curator | `0x0f4CAd4b62DfcEce23a6e88565BFf83C703B28e2` |
 
 The former operator key has been retired. Both live backend signing variables
-resolve to the rotated address above. Fly migration `009` is applied and the
-Vercel production deployment is Ready.
+resolve to the rotated address above. Fly migrations `001` through `010` are
+applied and the Vercel production deployment is Ready.
 
 ## Finding closure
 
@@ -60,7 +60,8 @@ Vercel production deployment is Ready.
 - Backend: TypeScript build plus 8 relay/receipt tests passing.
 - Frontend: optimized production build passing; only the documented non-fatal
   third-party `ox` dynamic-import warning remains.
-- Production: Fly health check passing, migration `009` applied, Vercel Ready,
+- Production: Fly health check passing, migrations `001` through `010` applied,
+  Vercel Ready,
   and both public contract addresses present in the live documentation page.
 
 The currently advertised networks remain GenLayer StudioNet and Base Sepolia;

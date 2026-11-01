@@ -1,6 +1,9 @@
 # ImpactDNA — V1 Milestone: Wallet-Connect & USDC Relaunch
 
-> Historical milestone, superseded by the 2026-11-01 remediation release. The deployment table and infrastructure section below reflect the current live testnet stack; see `docs/MILESTONE-REMEDIATION.md` for the new safety guarantees and verified transaction chain.
+> Historical milestone, superseded by the 2026-11-01 remediation release. The
+> deployment table and verification section below are maintained as a current
+> testnet snapshot; see `docs/MILESTONE-REMEDIATION.md` for the safety
+> guarantees and archived transaction chain.
 
 **Date:** 2026-09-13
 **Commit:** `be73630`

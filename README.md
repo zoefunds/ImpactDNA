@@ -21,7 +21,10 @@ The archived Base Sepolia deposit-to-claim transaction chain and current remedia
 
 Constructor: `platform_name="ImpactDNA"`, `min_eligible_score=60` (owner-adjustable).
 
-This is a full relaunch (2026-09-13) of an earlier native-GEN, email/password version — see [Current stage & path forward](#current-stage--path-forward) for what changed and why.
+The wallet-connect/USDC architecture launched on 2026-09-13 and received its
+latest security and recoverability deployment on 2026-11-01. See
+[Current stage & path forward](#current-stage--path-forward) for the remaining
+testnet-stage work.
 
 ## How it works
 
@@ -220,7 +223,15 @@ genlayer write 0xC7606d65963A7e45a2A5E08B102C73efBB307466 set_min_eligible_score
 
 ## Current stage & path forward
 
-ImpactDNA was fully relaunched on 2026-09-13: the earlier email/password + custodial-wallet + native-GEN version was replaced end-to-end with wallet-connect identity and USDC funding on Base Sepolia, and permissionless epochs replaced curator-only funding rounds. All prior user/contribution data was intentionally erased as part of this relaunch — this is a fresh start, not a migration.
+ImpactDNA was fully relaunched on 2026-09-13: the earlier email/password +
+custodial-wallet + native-GEN version was replaced end-to-end with
+wallet-connect identity and USDC funding on Base Sepolia, and permissionless
+epochs replaced curator-only funding rounds. The 2026-11-01 remediation release
+added wallet-bound GitHub proofs, mathematically consistent score caps, durable
+deposit/claim/settlement recovery, execution-aware confirmations, and the
+current coordinated contract addresses. All pre-relaunch user/contribution
+data was intentionally erased; this is a fresh testnet deployment, not a data
+migration.
 
 Concrete next steps:
 

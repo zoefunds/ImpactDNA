@@ -33,9 +33,11 @@ Every GenLayer write that used to be proxied here (register/verify/submit/evalua
 - `GET /api/platform/stats` — operational counters.
 - `GET /api/platform/contributions?offset&limit&status`
 - `GET /api/platform/contributions/:id`
+- `GET /api/platform/developers?offset&limit`
 - `GET /api/platform/developers/:username`
 - `GET /api/platform/leaderboard?limit`
 - `GET /api/platform/epochs` · `GET /api/platform/epochs/:id` · `GET /api/platform/grants?offset&limit`
+- `GET /api/platform/appeals`
 - `POST /api/platform/deposits/sync` `{ epochId }` — best-effort nudge to run the relay loop immediately after a client-signed USDC deposit, instead of waiting for the next scheduled tick.
 - `GET /api/platform/audit?offset&limit` — on-chain audit log.
 

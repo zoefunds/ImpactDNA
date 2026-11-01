@@ -26,13 +26,19 @@ The end-to-end ledger scenario is `test_full_deposit_to_claim_lifecycle`: it ope
 
 ## Coordinated deployment status
 
-The coordinated redeployment was completed on 2026-11-01 in this order:
+The coordinated deployment and deposit-recovery follow-up were completed on
+2026-11-01 in this order:
 
 1. Deploy the updated Base escrow and set its relayer.
 2. Deploy the updated Intelligent Contract and set the same relayer identity.
-3. Apply backend migrations `007`, `008`, and `009`, then deploy the backend with both new addresses. Production logs confirm `009_epoch_settlements.sql` applied.
+3. Apply backend migrations `007`, `008`, and `009`, then deploy the backend
+   with the coordinated addresses.
 4. Deploy the frontend with the new escrow and Intelligent Contract addresses. The Vercel production deployment is Ready and aliased to `impactdna.vercel.app`.
 5. Reconnect GitHub accounts created before this milestone so OAuth can create their wallet-proof gist.
+6. Add migration `010_unknown_epoch_deposits.sql`, deploy the escrow-level
+   pending-deposit settlement barrier, update the backend and frontend to the
+   current escrow address, and redeploy both services. Production logs confirm
+   migrations `001` through `010` are applied.
 
 ## Archived Base Sepolia deposit-to-claim evidence
 
@@ -54,7 +60,11 @@ Transaction chain:
 6. Base claim: `0x1dc434757c1626707938586b9ca5d13438c7d7b3e6c775af6d2a118b01bc6bae`
 7. GenLayer claim acknowledgement: `0x9978a523a56f9b8460ca9ba6cd721eb856806dd4012153dca4ec62f0e3786db3`
 
-Before/after recipient USDC balances were `102,139,500` and `103,139,500` base units. The final Base claimable balance is zero. GenLayer `get_grant("g-1")` reports `relayed=true`, `claimed=true`, and the Base relay/claim hashes above. The production eligibility threshold was restored to `40` before funding and remained `40` at final verification.
+Before/after recipient USDC balances were `102,139,500` and `103,139,500`
+base units. The final Base claimable balance is zero. GenLayer
+`get_grant("g-1")` reports `relayed=true`, `claimed=true`, and the Base
+relay/claim hashes above. That superseded demonstration deployment used an
+eligibility threshold of `40`; the current coordinated deployment uses `60`.
 
 The same run also exercised late-deposit recovery while correcting a StudioNet SDK receipt-shape mismatch: refundable deposit `0x2e6732122f038115d1a83934340b46d9f0acb2e732a612160209cd7f74cd31a6` was returned in Base transaction `0x74dc65a7ac28033284661d1d3f14d941c0b127ed95e1bbc1dcb4e739bc9dacc9`. Receipt parsing now has dedicated regression coverage for StudioNet's snake-case status and comma-less readable return payload.
 
@@ -95,6 +105,9 @@ Regression evidence: 13 Intelligent Contract tests, 7 Foundry escrow tests,
 - The backend adds the same settlement barrier from `pending_deposits`, and
   Base reconciliation retries recognize an acknowledgement that landed before
   a database update.
+- Migration `010_unknown_epoch_deposits.sql` makes `epoch_id` nullable for an
+  unrecognized hash, preserves the raw `epoch_hash`, and indexes pending rows
+  for settlement checks.
 - `testInvalidEpochDepositRemainsExactlyRefundable` and
   `testEmptySettlementWaitsForFailedBaseAcknowledgement` cover the two stranded
   deposit sequences. Backend tests cover known/unknown epoch-hash routing.

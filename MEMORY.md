@@ -44,4 +44,5 @@ Both chains are testnets. The Base escrow is the sole custodian of USDC; GenLaye
 - Backend relay/receipt tests: 8 passing.
 - Frontend production build: passing (third-party `ox` dynamic-import warnings remain non-fatal).
 - A complete 1-USDC Base Sepolia deposit-to-claim run is recorded in `docs/MILESTONE-REMEDIATION.md`.
-- Fly production is healthy with migration `009` applied; Vercel production is Ready and exposes the coordinated contract addresses.
+- Fly production is healthy with migrations `001` through `010` applied;
+  Vercel production is Ready and exposes the current contract addresses.
