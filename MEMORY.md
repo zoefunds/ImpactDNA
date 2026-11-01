@@ -6,6 +6,7 @@ Last verified: 2026-11-01. This file records current operational facts; historic
 
 - Frontend: `https://impactdna.vercel.app`
 - Backend: `https://impactdna-milestone-api.fly.dev` (`impactdna-milestone-api`, Fly region `iad`)
+- Production relay source: `d7352eeae4085a9226afb624f9dc0f865b96a134`
 - Database: `impactdna-milestone-db`; migrations `001` through `011` applied
 - GenLayer StudioNet contract: `0xC7606d65963A7e45a2A5E08B102C73efBB307466`
 - Base Sepolia escrow: `0x51c7575D0893D6a5cc98dA5356A8e727502Eb8B0`
@@ -49,3 +50,5 @@ Both chains are testnets. The Base escrow is the sole custodian of USDC; GenLaye
 - A complete 1-USDC Base Sepolia deposit-to-claim run is recorded in `docs/MILESTONE-REMEDIATION.md`.
 - Fly production is healthy with migrations `001` through `011` applied;
   Vercel production is Ready and exposes the current contract addresses.
+- Production has no unresolved historical deposit rows (`2` total, `0`
+  pending) at the 2026-11-01 verification point.

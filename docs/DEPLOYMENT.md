@@ -142,9 +142,11 @@ on that flag.
 
 ## Current production verification
 
+- Production relay source: `d7352eeae4085a9226afb624f9dc0f865b96a134`.
 - Fly app `impactdna-milestone-api`: one started machine, health check passing.
 - Migrations through `011_deposit_event_identity.sql`: applied at production
   startup on 2026-11-01.
+- Production deposit queue at verification: `2` total rows, `0` pending.
 - Vercel deployment: production Ready and aliased to `https://impactdna.vercel.app`.
 - Live backend configuration resolves both operator and relayer keys to
   `0x0f4CAd4b62DfcEce23a6e88565BFf83C703B28e2` without exposing the keys.

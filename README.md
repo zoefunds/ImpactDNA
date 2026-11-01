@@ -12,6 +12,7 @@ ImpactDNA flips the traditional grants model: instead of funding proposals befor
 |---|---|
 | **Web app** | [impactdna.vercel.app](https://impactdna.vercel.app) |
 | **REST API** (24/7, health-checked) | [impactdna-milestone-api.fly.dev](https://impactdna-milestone-api.fly.dev) |
+| **Production relay source** | [`d7352ee`](https://github.com/zoefunds/ImpactDNA/commit/d7352eeae4085a9226afb624f9dc0f865b96a134) — batched-deposit event identity release |
 | **GenLayer Intelligent Contract** | [`0xC7606d65963A7e45a2A5E08B102C73efBB307466`](https://studio.genlayer.com) — GenLayer StudioNet (gasless) |
 | **Base Sepolia escrow** | [`0x51c7575D0893D6a5cc98dA5356A8e727502Eb8B0`](https://sepolia.basescan.org/address/0x51c7575D0893D6a5cc98dA5356A8e727502Eb8B0) — `ImpactDnaEscrow.sol` |
 | **USDC (Base Sepolia)** | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |

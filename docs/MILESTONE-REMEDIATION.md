@@ -116,6 +116,7 @@ Regression evidence: 13 Intelligent Contract tests, 7 Foundry escrow tests,
 
 ## Batched-deposit event identity follow-up (2026-11-01)
 
+- Production relay source: `d7352eeae4085a9226afb624f9dc0f865b96a134`.
 - Migration `011_deposit_event_identity.sql` replaces the deposit queue's
   transaction-hash primary key with `event_id = <base_tx_hash>:<log_index>`.
   The transaction hash remains indexed metadata, and the escrow's unique
@@ -127,3 +128,5 @@ Regression evidence: 13 Intelligent Contract tests, 7 Foundry escrow tests,
 - `reconciles every deposit emitted by one batched Base transaction` covers two
   logs sharing one transaction hash and proves both deposit IDs are recorded,
   Base-reconciled, and returned as completed results without omission.
+- Production verification found `2` durable deposit rows and `0` unresolved
+  rows after the migration, so no historical queue item requires recovery.

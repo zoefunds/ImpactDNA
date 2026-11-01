@@ -142,6 +142,8 @@ relaunch — this is a fresh start, not a migration.
 - Backend: TypeScript build and 9/9 relay/receipt tests pass; migrations `001`–`011`
   are applied in production. A complete Base deposit → GenLayer record →
   Base allocation → claim → GenLayer acknowledgement run is documented.
+- The deployed relay implementation is commit `d7352ee`; production had `0`
+  pending deposit rows at final verification.
 - Frontend: production builds clean; wallet-connect modal, funding page
   (epoch open/deposit), and dashboard verified live in-browser against
   the production deployment.

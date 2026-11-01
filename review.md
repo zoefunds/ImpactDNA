@@ -13,6 +13,7 @@ are in [`docs/MILESTONE-REMEDIATION.md`](docs/MILESTONE-REMEDIATION.md).
 |---|---|
 | Frontend | `https://impactdna.vercel.app` |
 | Backend | `https://impactdna-milestone-api.fly.dev` |
+| Production relay source | `d7352eeae4085a9226afb624f9dc0f865b96a134` |
 | GenLayer StudioNet | `0xC7606d65963A7e45a2A5E08B102C73efBB307466` |
 | Base Sepolia escrow | `0x51c7575D0893D6a5cc98dA5356A8e727502Eb8B0` |
 | Base Sepolia USDC | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
@@ -66,6 +67,8 @@ applied and the Vercel production deployment is Ready.
 - Production: Fly health check passing, migrations `001` through `011` applied,
   Vercel Ready,
   and both public contract addresses present in the live documentation page.
+- Deposit queue: `2` durable rows and `0` pending at final production
+  verification.
 
 The currently advertised networks remain GenLayer StudioNet and Base Sepolia;
 they are testnets, not a mainnet or real-value deployment.

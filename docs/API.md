@@ -61,4 +61,7 @@ Relayer-only settlement methods are not public API endpoints: the backend calls
 epoch with no eligible recipients, persists the Base transaction hash, and then
 calls GenLayer `mark_grants_relayed`. Both settlement methods reject while the
 epoch has unresolved Base deposits. Deposits whose epoch hash does not resolve
-to a GenLayer epoch are persisted and reconciled as refundable.
+to a GenLayer epoch are persisted and reconciled as refundable. Each confirmed
+`Deposited` log is durably identified by `<base_tx_hash>:<log_index>` and then
+reconciled by its unique escrow `depositId`, so several deposits emitted by one
+smart-account transaction retain separate success and retry state.
