@@ -13,6 +13,7 @@ interface User {
   displayName: string;
   email: string | null;
   githubUsername: string | null;
+  githubProofGistId: string | null;
   walletAddress: string;
   role: string;
 }
@@ -188,7 +189,8 @@ function DashboardInner() {
             <p className="text-on-variant text-sm mb-6">
               Connect your GitHub account (OAuth — we never accept a typed username, so you can
               only link the account you actually control), register it on-chain, then verify it —
-              validators fetch your GitHub profile inside consensus to prove it exists and matches.
+              validators fetch a public proof gist created by your authenticated GitHub account and
+              require its exact wallet binding inside consensus.
               These two writes are signed directly by your connected wallet.
             </p>
             {!user.githubUsername ? (
@@ -202,11 +204,12 @@ function DashboardInner() {
                 <button className="btn-primary" disabled={busy !== ""}
                   onClick={() =>
                     run("register", async () => {
-                      await genlayerWrite("register_developer", [user.githubUsername, user.displayName]);
+                      if (!user.githubProofGistId) throw new Error("Reconnect GitHub to create a wallet-bound proof");
+                      await genlayerWrite("register_developer", [user.githubUsername, user.displayName, user.githubProofGistId]);
                       // Read fresh instead of waiting on the backend's ~90s
                       // cached read, so the "Verify" step appears immediately.
                       setOnchainDev(await genlayerRead("get_developer", [user.githubUsername]) as Record<string, unknown>);
-                    }, "Developer registered on-chain. Now verify your identity.", { skipRefresh: true })
+                    }, "Developer identity registered and verified on-chain.", { skipRefresh: true })
                   }>
                   {busy === "register" ? "Submitting to GenLayer…" : "Register on-chain"}
                 </button>
@@ -218,10 +221,11 @@ function DashboardInner() {
             ) : (
               <div className="flex items-center gap-4">
                 <span className="font-mono text-sm text-on-variant">@{user.githubUsername}</span>
-                <button className="btn-ghost" disabled={busy !== ""}
+                <button className="btn-ghost" disabled={busy !== "" || !user.githubProofGistId}
                   onClick={() =>
                     run("verify", async () => {
-                      await genlayerWrite("verify_developer", [user.githubUsername]);
+                      if (!user.githubProofGistId) throw new Error("Reconnect GitHub to create a wallet-bound proof");
+                      await genlayerWrite("verify_developer", [user.githubUsername, user.githubProofGistId]);
                       setOnchainDev(await genlayerRead("get_developer", [user.githubUsername]) as Record<string, unknown>);
                     }, "GitHub identity verified on-chain.", { skipRefresh: true })
                   }>

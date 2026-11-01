@@ -3,6 +3,7 @@ import { studionet, localnet, testnetAsimov } from "genlayer-js/chains";
 import { TransactionStatus } from "genlayer-js/types";
 import { config } from "../config.js";
 import { logger } from "./logger.js";
+import { genlayerReceiptReturnValue, genlayerReceiptStatus } from "./genlayerReceipt.js";
 import { cacheGet, cacheSet, cacheDel } from "../redis.js";
 
 /**
@@ -124,16 +125,26 @@ export async function contractWrite(
 
   const receipt = await client.waitForTransactionReceipt({
     hash: txHash,
-    status: TransactionStatus.ACCEPTED,
+    status: TransactionStatus.FINALIZED,
     retries: 60,
     interval: 5000,
   });
 
   const r = receipt as unknown as Record<string, unknown>;
-  const status = String(r?.statusName ?? r?.status ?? "UNKNOWN");
+  // genlayer-js releases have exposed this field as both camelCase and
+  // snake_case. StudioNet's current finalized receipt uses status_name and
+  // keeps the numeric status (7) alongside it.
+  const status = genlayerReceiptStatus(r);
+  const normalized = status.toUpperCase();
+  if (normalized !== "FINALIZED") {
+    throw new Error(`GenLayer write ${functionName} did not execute successfully (${status})`);
+  }
+  if (r?.consensus_data && typeof r.consensus_data === "object" && "error" in (r.consensus_data as object)) {
+    throw new Error(String((r.consensus_data as Record<string, unknown>).error));
+  }
   return {
     txHash: String(txHash),
     status,
-    result: serialize(r?.consensus_data ?? null),
+    result: serialize(genlayerReceiptReturnValue(r)),
   };
 }

@@ -10,6 +10,7 @@
 import { config } from "../config.js";
 import { contractRead, contractWrite, invalidateRead } from "../lib/genlayer.js";
 import { logger } from "../lib/logger.js";
+import { genlayerBooleanResult } from "../lib/genlayerReceipt.js";
 
 export function isGenlayerRelayConfigured(): boolean {
   return Boolean(config.BASE_SEPOLIA_RELAYER_PRIVATE_KEY && config.GENLAYER_CONTRACT_ADDRESS);
@@ -20,7 +21,7 @@ export async function recordDepositOnGenlayer(
   depositor: string,
   amountUsdc: bigint,
   baseTxHash: string,
-): Promise<string> {
+): Promise<{ txHash: string; accepted: boolean }> {
   const res = await contractWrite(config.BASE_SEPOLIA_RELAYER_PRIVATE_KEY, "record_deposit", [
     epochId,
     depositor,
@@ -32,15 +33,23 @@ export async function recordDepositOnGenlayer(
     { epochId, depositor, amountUsdc: amountUsdc.toString(), baseTxHash, txHash: res.txHash },
     "recorded deposit on GenLayer",
   );
-  return res.txHash;
+  const result = res.result;
+  // StudioNet currently serializes GenVM dict returns in `readable` form
+  // without JSON commas (for example {"accepted":true"epoch":"e-1"}).
+  // Prefer the structured value when available, but tolerate that wire
+  // representation so a successful deposit is never misclassified as late.
+  const accepted = genlayerBooleanResult(result, "accepted");
+  return { txHash: res.txHash, accepted };
 }
 
 export interface PendingRelayGrant {
   id: string;
+  epoch: string;
   wallet: string;
   amount_usdc: string;
   relayed: boolean;
   claimed: boolean;
+  claim_tx_hash?: string;
 }
 
 export async function getGrantsPendingRelay(epochId: string): Promise<PendingRelayGrant[]> {
@@ -57,6 +66,20 @@ export async function listEpochs(): Promise<{ items: Array<Record<string, unknow
   };
 }
 
+export async function listAllGrants(): Promise<PendingRelayGrant[]> {
+  const out: PendingRelayGrant[] = [];
+  let offset = 0;
+  for (;;) {
+    const page = (await contractRead("list_grants", [offset, 50], { skipCache: true })) as {
+      total: number;
+      items: PendingRelayGrant[];
+    };
+    out.push(...(page.items ?? []));
+    offset += page.items?.length ?? 0;
+    if (offset >= Number(page.total ?? 0) || !page.items?.length) return out;
+  }
+}
+
 export async function markGrantsRelayedOnGenlayer(epochId: string, baseTxHash: string): Promise<string> {
   const res = await contractWrite(config.BASE_SEPOLIA_RELAYER_PRIVATE_KEY, "mark_grants_relayed", [
     epochId,
@@ -67,10 +90,11 @@ export async function markGrantsRelayedOnGenlayer(epochId: string, baseTxHash: s
   return res.txHash;
 }
 
-export async function markGrantClaimedOnGenlayer(grantId: string, baseTxHash: string): Promise<string> {
+export async function markGrantClaimedOnGenlayer(grantId: string, baseTxHash: string, eventId: string): Promise<string> {
   const res = await contractWrite(config.BASE_SEPOLIA_RELAYER_PRIVATE_KEY, "mark_grant_claimed", [
     grantId,
     baseTxHash,
+    eventId,
   ]);
   await invalidateRead("get_grant", [grantId]);
   logger.info({ grantId, baseTxHash, txHash: res.txHash }, "marked grant claimed on GenLayer");

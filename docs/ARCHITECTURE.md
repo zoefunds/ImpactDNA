@@ -43,12 +43,12 @@ relayer-only write against double-application.
 
 | Operation | Nondet primitive | Validator agreement |
 |---|---|---|
-| `verify_developer` | `gl.eq_principle.strict_eq` over stable GitHub user fields (id, login, type, created_at) | exact |
+| `register_developer` / `verify_developer` | `gl.eq_principle.strict_eq` over stable GitHub fields and a GitHub-owned public gist binding username to caller wallet | exact |
 | `evaluate_contribution` | `gl.vm.run_nondet_unsafe` — leader fetches repo + LLM-scores 5 dimensions | validator re-fetches & re-scores; gates (fork/ownership/eligible) exact, score in same or adjacent 25-pt bucket, repo id equal |
 | `detect_manipulation` | `run_nondet_unsafe` | manipulative flag match (medium-risk corridor), risk within 1 level |
 | `resolve_appeal` | `run_nondet_unsafe` | uphold/deny must match |
 | `open_epoch` / `close_epoch` | none — deterministic | trivial |
-| `record_deposit` / `mark_grants_relayed` / `mark_grant_claimed` | none — deterministic, relayer-only | trivial (idempotent on `base_tx_hash`) |
+| `record_deposit` / `mark_grants_relayed` / `mark_grant_claimed` | none — deterministic, relayer-only | trivial (idempotent on deposit/event identifiers) |
 
 ### Permissionless epochs, USDC-funded via relayer
 
@@ -56,7 +56,7 @@ relayer-only write against double-application.
 opens and names an epoch, which starts with `pool_usdc = 0`. Real funding
 happens off this chain entirely: a depositor calls `ImpactDnaEscrow.deposit`
 on Base Sepolia, the backend relayer observes the confirmed event and calls
-`record_deposit(epoch_id, depositor, amount, base_tx_hash)`, crediting that
+`record_deposit(epoch_id, depositor, amount, deposit_id)`, crediting that
 epoch's own `pool_usdc`. `close_epoch(epoch_id)` — callable by that epoch's
 opener or any curator — then splits `pool_usdc` by quadratic weight
 (`score^2`) exactly as before; the relayer reads
@@ -81,12 +81,14 @@ leader and validator; `[TRANSIENT]` network/5xx agree if both transient;
 ## Base Sepolia escrow (`contracts/base/ImpactDnaEscrow.sol`)
 
 No external dependencies (no OpenZeppelin) — a `Pool` struct per epoch id
-(`deposited`, `allocated`, `grantsSet`), a `claimable` mapping credited only
-by the relayer's one-shot `setGrants` call, and a `claim`/`claimMany`
+(`deposited`, `accepted`, `allocated`, `grantsSet`), exact deposit records
+reconciled as accepted or refundable, and `claimable`/immutable `granted`
+mappings credited only by the relayer's one-shot `setGrants` call. The `claim`/`claimMany`
 self-serve pull pattern with a reentrancy guard. Owner/relayer are
 independently settable (`transferOwnership`/`setRelayer`); an owner-only
-`withdrawUnallocated` recovers dust below a grant-weight rounding, never
-anything already allocated or claimable.
+`withdrawUnallocated` is disabled while an epoch is active and can recover
+accepted rounding dust only after settlement; it cannot touch pending,
+refundable, allocated, or claimable balances.
 
 ## Backend (`backend/`)
 
@@ -104,8 +106,8 @@ Node 20, TypeScript strict, Express.
   (`detect_manipulation`, `resolve_appeal`, `set_min_eligible_score`,
   `add_curator`/`remove_curator`).
 - **Relay loop** (`src/jobs/relay.ts`): scans Base Sepolia for confirmed
-  `Deposited`/`Claimed` events, applies them to GenLayer
-  (`record_deposit`/`mark_grant_claimed`), and pushes closed epochs' settled
+  `Deposited`/`Claimed` events into durable rows, applies them to GenLayer,
+  reconciles accepted/refundable deposits on Base, and pushes closed epochs' settled
   grants to the escrow (`setGrants` → `mark_grants_relayed`). Guarded by a
   Redis-backed distributed lock (`withLock`) so multiple Fly machines never
   double-relay; degrades to an in-process lock if Redis is unavailable.
@@ -121,8 +123,8 @@ Node 20, TypeScript strict, Express.
 ### Database schema
 `users` (wallet_address, display_name, email — notification-only, nullable —
 github_username, role), `refresh_tokens`, `auth_nonces` (SIWE challenges),
-`contribution_mirror` (fast reads; chain is canonical), `pending_deposits` +
-`relay_sync_state` (relay-loop durability/cursors), `notification_log`,
+`contribution_mirror` (fast reads; chain is canonical), `pending_deposits`,
+`pending_claims`, and `relay_sync_state` (durable relay events/retries/cursors), `notification_log`,
 `audit_events`, `schema_migrations`. Forward-only SQL migrations applied
 transactionally at boot.
 

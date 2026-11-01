@@ -1,5 +1,7 @@
 # Review: Treasury Accounting & Score-Consistency Fix
 
+> Historical note: this memo describes the pre-USDC implementation. Its live-deployment details have been replaced with the current milestone deployment below. Current remediation and transaction evidence are in `docs/MILESTONE-REMEDIATION.md`.
+
 ## Request
 
 > Please separate reserved grant funds from available treasury funds so every
@@ -12,7 +14,7 @@
 
 Both issues were fixed in `contracts/impact_dna.py`, covered by new tests in
 `contracts/tests/`, verified live against the deployed contract
-(`0x509382e2c63814aCD85ECA415251E8C1f92620F3`).
+(`0x18de100d155851cb179a6dF17f301C158aDed0AC`).
 
 ---
 
@@ -106,51 +108,31 @@ allowing settlement to proceed.
 
 ## 3. Tests
 
-Added `contracts/tests/` with a minimal in-process stand-in for the
-`genlayer` runtime (`fake_genlayer.py` — fakes `TreeMap`/`DynArray` storage
-provisioning, `gl.public.write/view`, `gl.vm.run_nondet_unsafe` collapsed to
-a single leader run, `gl.eq_principle.strict_eq`, and `gl.nondet.web.get` /
-`gl.nondet.exec_prompt` as per-test mocks), since no `genlayer` package is
-installed locally and consensus itself is out of scope for these tests.
-
-`test_impact_dna.py` covers:
-
-- **`test_full_deposit_to_claim_lifecycle`** — deposit → register →
-  verify → submit → evaluate → open/close epoch → claim, asserting the
-  grant is correctly funded and claimed, and a second claim attempt is
-  rejected.
-- **`test_closed_epoch_grant_stays_claimable_without_further_deposits`** —
-  the exact regression from issue 1: treasury fully drained by a single
-  epoch, grant still claimable because it lives in `reserved_atto`.
-- **`test_two_epochs_dont_let_second_drain_first_grants_claimability`** —
-  a second epoch draining `treasury_atto` to zero does not affect the
-  claimability of a grant from an earlier, already-closed epoch.
-- **`test_bucket_helper_matches_total_boundaries`** — sanity-checks the
-  bucket boundaries themselves (0–24 / 25–49 / 50–74 / 75–100).
-- **`test_evaluate_contribution_rejects_inconsistent_dimension_sum`** —
-  a tampered result with a bucket that doesn't match its own total is
-  rejected at evaluation time.
-- **`test_close_epoch_revalidates_score_consistency_on_stored_records`** —
-  a persisted record corrupted after evaluation (simulating any future
-  write path) is caught at `close_epoch` time, before it can affect grant
-  weights.
-
-All 6 tests pass:
+The current contract suite uses the lightweight GenLayer stand-in in
+`contracts/tests/fake_genlayer.py` and covers the reconciled USDC lifecycle,
+wallet-bound GitHub registration, impersonation/squatting rejection,
+fork/non-owner caps, threshold boundaries, relay idempotency, and claim
+acknowledgement. All 12 tests pass:
 
 ```
-cd contracts/tests && python3 -m pytest -q
-......                                                                   [100%]
-6 passed in 0.03s
+python3 -m pytest contracts/tests/test_impact_dna.py -q
+............                                                             [100%]
+12 passed
 ```
+
+The Base escrow adds 4 Foundry regression tests for accepted collateral,
+late refunds, post-settlement deposit rejection, and active-collateral
+withdrawal protection. The backend adds 6 tests for complete grant matching,
+multi-grant claim events, retries, and StudioNet receipt parsing.
 
 ---
 
 ## Verification against the live contract
 
 - Fix implemented and tested locally, then the fixed contract source was
-  deployed to `0x509382e2c63814aCD85ECA415251E8C1f92620F3` on GenLayer
+  deployed to `0x18de100d155851cb179a6dF17f301C158aDed0AC` on GenLayer
   StudioNet.
-- Backend (`impactdna-api-zoe.fly.dev`) and frontend (`impactdna.vercel.app`)
+- Backend (`impactdna-milestone-api.fly.dev`) and frontend (`impactdna.vercel.app`)
   both point at this address (`GENLAYER_CONTRACT_ADDRESS`).
 - Manual on-chain testing against the deployed contract confirmed correct
   behavior (per direct user verification).

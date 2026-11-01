@@ -5,8 +5,9 @@ import { config, githubCallbackUrl } from "../config.js";
  * GitHub OAuth linking. Replaces free-text username entry: a user can
  * only link the GitHub account they can actually authenticate as, which
  * closes the "typed someone else's username" gap that the on-chain
- * verify_developer call alone doesn't prevent (it re-fetches the
- * *claimed* username's public profile, not proof of control over it).
+ * The callback also creates a public gist whose exact payload binds the
+ * authenticated GitHub login to the already-authenticated wallet. The
+ * Intelligent Contract verifies that proof before reserving the username.
  */
 
 const STATE_ISSUER = "impactdna-github-oauth";
@@ -31,7 +32,7 @@ export function buildAuthorizeUrl(state: string): string {
   const params = new URLSearchParams({
     client_id: config.GITHUB_CLIENT_ID,
     redirect_uri: githubCallbackUrl,
-    scope: "read:user",
+    scope: "read:user gist",
     state,
     allow_signup: "true",
   });
@@ -41,6 +42,7 @@ export function buildAuthorizeUrl(state: string): string {
 export interface GithubProfile {
   id: number;
   login: string;
+  accessToken: string;
 }
 
 export async function exchangeCodeForProfile(code: string): Promise<GithubProfile> {
@@ -67,5 +69,31 @@ export async function exchangeCodeForProfile(code: string): Promise<GithubProfil
   });
   if (!userRes.ok) throw new Error("Failed to fetch GitHub profile");
   const profile = (await userRes.json()) as { id: number; login: string };
-  return { id: profile.id, login: profile.login.toLowerCase() };
+  return { id: profile.id, login: profile.login.toLowerCase(), accessToken: tokenBody.access_token };
+}
+
+export async function createWalletProofGist(accessToken: string, login: string, wallet: string): Promise<string> {
+  const body = {
+    description: "ImpactDNA wallet ownership proof",
+    public: true,
+    files: {
+      "impactdna-wallet-proof.json": {
+        content: JSON.stringify({ github: login.toLowerCase(), wallet: wallet.toLowerCase() }),
+      },
+    },
+  };
+  const response = await fetch("https://api.github.com/gists", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/vnd.github+json",
+      "Content-Type": "application/json",
+      "User-Agent": "ImpactDNA",
+    },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) throw new Error(`GitHub proof gist creation failed (${response.status})`);
+  const gist = (await response.json()) as { id?: string };
+  if (!gist.id) throw new Error("GitHub proof gist response did not include an id");
+  return gist.id;
 }

@@ -13,7 +13,7 @@ const SECTIONS: Array<{ title: string; body: string[]; code?: string }> = [
   {
     title: "The lifecycle",
     body: [
-      "1 · Register — create an account; a permanent custodial wallet is generated and encrypted server-side. 2 · Verify — the contract fetches your GitHub profile inside consensus to prove the identity exists and matches. 3 · Submit — propose a repository you shipped, with a category and description. 4 · Evaluate — validators fetch the repo from GitHub in-contract, score five impact dimensions with LLM reasoning, and cross-check each other. 5 · Fund — when a curator closes an epoch, the pool is split deterministically across eligible contributions by quadratic impact weight. 6 · Appeal — rejected or flagged work can be appealed once; validators re-judge against fresh evidence.",
+      "1 · Connect — sign a short-lived nonce with your own wallet; ImpactDNA never holds the key. 2 · Link GitHub — authenticated OAuth creates a public gist binding the GitHub account to that wallet, and validators verify both ownership and the exact payload on-chain. 3 · Submit — propose an owned repository to an open epoch. 4 · Evaluate — validators independently fetch GitHub evidence and score five impact dimensions. 5 · Fund — anyone can deposit Base Sepolia USDC; the relayer reconciles each uniquely identified deposit before an opener or curator closes the epoch. 6 · Claim — settled grants are relayed to the Base escrow and recipients claim directly from their wallets. Rejected or flagged work can be appealed once.",
     ],
   },
   {
@@ -38,23 +38,24 @@ const SECTIONS: Array<{ title: string; body: string[]; code?: string }> = [
   {
     title: "Funding mathematics",
     body: [
-      "When an epoch closes, every eligible, unflagged contribution receives pool × weight ÷ total_weight where weight = score². The quadratic emphasis rewards high-impact work disproportionately while still funding solid mid-tier contributions. Unallocated remainder returns to the treasury. This settlement step is pure integer math — no LLM, no web — so consensus on it is trivial.",
+      "When an epoch closes, every eligible, unflagged contribution receives pool × weight ÷ total_weight where weight = score². The quadratic emphasis rewards high-impact work disproportionately while still funding solid mid-tier contributions. Unallocated remainder stays in the closed Base escrow pool and can be withdrawn only after settlement; active accepted collateral cannot be withdrawn. This settlement step is pure integer math — no LLM, no web — so consensus on it is trivial.",
     ],
   },
   {
     title: "Wallets & security",
     body: [
-      "Every account gets a wallet at signup. The address never changes and survives device changes, browser resets and reinstalls — the private key is stored AES-256-GCM encrypted and can be exported after re-confirming your password. Rate limiting, RBAC (developer / curator / admin), audit logging, and strict input validation protect the API. StudioNet is gasless, so contract interactions need no token balance.",
+      "Your connected wallet is your identity and signs every user action; the backend never stores or exports its private key. GitHub usernames cannot be squatted because registration requires an OAuth-created, wallet-bound public proof gist. Base deposits remain pending until the relayer reconciles GenLayer's decision, and late deposits become exactly refundable. Rate limiting, role checks, audit logging, durable relay queues, and strict input validation protect the API. StudioNet is gasless, while Base Sepolia actions require test ETH for gas.",
     ],
   },
   {
     title: "Contract reference",
     body: [
-      "Deployed on GenLayer StudioNet. Key write methods: register_developer, verify_developer, submit_contribution, evaluate_contribution, detect_manipulation (curator), open_epoch / close_epoch (curator), claim_grant, request_appeal, resolve_appeal (curator). Key views: get_platform_info, get_contribution, list_contributions, get_leaderboard, list_epochs, list_grants, get_audit_log.",
+      "The evaluation ledger is deployed on GenLayer StudioNet and USDC custody is deployed on Base Sepolia. Key GenLayer writes include register_developer, submit_contribution, evaluate_contribution, detect_manipulation, open_epoch, close_epoch, request_appeal and resolve_appeal. Relayer-only writes record deposits and acknowledge allocations and claims. The Base escrow exposes deposit(epochId, depositId, amount), refundDeposit, claim and claimMany.",
     ],
-    code: `Contract: 0x509382e2c63814aCD85ECA415251E8C1f92620F3
-Network:  GenLayer StudioNet (gasless)
-Source:   contracts/impact_dna.py — 1,500+ lines, genvm-lint clean`,
+    code: `GenLayer: 0x18de100d155851cb179a6dF17f301C158aDed0AC
+Escrow:   0xB5777c54047DF43024650197B560A227e35f25B8
+USDC:     0x036CbD53842c5426634e7929541eC2318f3dCF7e
+Networks: GenLayer StudioNet + Base Sepolia`,
   },
 ];
 

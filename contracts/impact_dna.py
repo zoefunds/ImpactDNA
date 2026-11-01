@@ -247,6 +247,23 @@ def _stable_user_projection(data: dict) -> dict:
     }
 
 
+def _stable_gist_projection(data: dict) -> dict:
+    """Consensus-stable ownership proof created through GitHub OAuth.
+
+    A gist can only be created by the authenticated GitHub account.  The
+    contract verifies its owner and exact proof payload, so a caller cannot
+    bind somebody else's public username to their wallet.
+    """
+    files = data.get("files") or {}
+    proof_file = files.get("impactdna-wallet-proof.json") or {}
+    return {
+        "id": str(data.get("id", "")),
+        "owner_login": str((data.get("owner") or {}).get("login", "")).lower(),
+        "public": bool(data.get("public", False)),
+        "content": str(proof_file.get("content", "")),
+    }
+
+
 def _coarse_metric(value: int) -> str:
     """Order-of-magnitude bucket for volatile popularity metrics so they
     can inform LLM reasoning without breaking validator agreement."""
@@ -331,6 +348,25 @@ def _weight_for_score(total: int) -> int:
     return total * total  # 0..10000
 
 
+def _cap_dimensions(dims: dict, cap: int) -> dict:
+    """Apply a total cap without breaking the dimension-sum invariant.
+
+    Reductions are deterministic and balanced: repeatedly trim the largest
+    dimension (dimension declaration order breaks ties) until the cap is met.
+    """
+    out = {key: int(dims[key]) for key in DIMENSIONS}
+    target = max(0, int(cap))
+    excess = max(0, sum(out.values()) - target)
+    while excess > 0:
+        key = max(DIMENSIONS, key=lambda name: (out[name], -DIMENSIONS.index(name)))
+        if out[key] <= 0:
+            break
+        trim = min(out[key], excess)
+        out[key] -= trim
+        excess -= trim
+    return out
+
+
 # ---------------------------------------------------------------------------
 # The contract
 # ---------------------------------------------------------------------------
@@ -347,6 +383,7 @@ class ImpactDNA(gl.Contract):
     relayer: Address  # backend relayer authorized to bridge Base Sepolia <-> here
     # base_tx_hash -> True, guards every relayer write against double-apply
     processed_base_tx: TreeMap[str, bool]
+    deposit_outcomes: TreeMap[str, bool]
 
     # config values are stored as string to keep one homogeneous map
     config: TreeMap[str, str]
@@ -423,7 +460,7 @@ class ImpactDNA(gl.Contract):
             gate = 40
         self.config["platform_name"] = (platform_name or "ImpactDNA")[:80]
         self.config["min_eligible_score"] = str(gate)
-        self.config["version"] = "2.0.0"
+        self.config["version"] = "2.1.0"
         self.config["max_contributions_per_dev"] = str(MAX_CONTRIBUTIONS_PER_DEV)
 
         # deployer is the first curator
@@ -603,7 +640,7 @@ class ImpactDNA(gl.Contract):
         self._audit("set_relayer", self._sender_hex(), {"relayer": self.relayer.as_hex})
 
     @gl.public.write
-    def record_deposit(self, epoch_id: str, depositor: str, amount_usdc: int, base_tx_hash: str) -> None:
+    def record_deposit(self, epoch_id: str, depositor: str, amount_usdc: int, deposit_id: str) -> dict:
         """Relayer-only: record a USDC deposit that landed in the Base
         Sepolia escrow contract (contracts/base/ImpactDnaEscrow.sol),
         under the given epoch's escrow pool. Anyone may deposit into any
@@ -613,19 +650,25 @@ class ImpactDNA(gl.Contract):
 
         Real custody lives on Base Sepolia, not here — this call only
         updates the ledger this contract uses to close funding epochs.
-        Idempotent on base_tx_hash so a retried relay sweep can never
+        Idempotent on deposit_id so a retried relay sweep can never
         double-count the same on-chain deposit."""
         self._require_relayer()
         if amount_usdc <= 0:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Deposit amount must be positive")
-        if not base_tx_hash:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} Missing base_tx_hash")
-        if self.processed_base_tx.get(base_tx_hash, False):
-            return
-        self.processed_base_tx[base_tx_hash] = True
+        if not deposit_id:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Missing deposit_id")
+        if self.processed_base_tx.get(deposit_id, False):
+            return {"epoch": epoch_id, "accepted": self.deposit_outcomes.get(deposit_id, False), "already_processed": True}
         epoch = self._load("epoch", epoch_id)
         if epoch["status"] != EPOCH_OPEN:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} Epoch is not open for deposits")
+            # Do not revert late deposits: recording a deterministic rejection
+            # lets the relayer make the exact Base deposit refundable.
+            self.processed_base_tx[deposit_id] = True
+            self.deposit_outcomes[deposit_id] = False
+            self._audit("reject_late_deposit", depositor, {"epoch": epoch_id, "deposit_id": deposit_id})
+            return {"epoch": epoch_id, "accepted": False, "already_processed": False}
+        self.processed_base_tx[deposit_id] = True
+        self.deposit_outcomes[deposit_id] = True
         epoch["pool_usdc"] = str(int(epoch["pool_usdc"]) + amount_usdc)
         self._save("epoch", epoch_id, epoch)
         self.treasury_usdc = u256(int(self.treasury_usdc) + amount_usdc)
@@ -633,18 +676,46 @@ class ImpactDNA(gl.Contract):
         self._audit(
             "record_deposit",
             depositor,
-            {"epoch": epoch_id, "usdc": amount_usdc, "base_tx_hash": base_tx_hash},
+            {"epoch": epoch_id, "usdc": amount_usdc, "deposit_id": deposit_id},
         )
+        return {"epoch": epoch_id, "accepted": True, "already_processed": False}
 
     # =======================================================================
     # Developer registry (write)
     # =======================================================================
 
+    def _github_wallet_proof(self, username: str, wallet: str, proof_gist_id: str) -> dict:
+        gist_id = (proof_gist_id or "").strip()
+        if not re.match(r"^[A-Fa-f0-9]{8,64}$", gist_id):
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Invalid GitHub proof gist id")
+
+        def fetch_bundle():
+            user_data = self._fetch_github_json(f"/users/{username}")
+            gist_data = self._fetch_github_json(f"/gists/{gist_id}")
+            return {
+                "user": _stable_user_projection(user_data),
+                "gist": _stable_gist_projection(gist_data),
+            }
+
+        bundle = gl.eq_principle.strict_eq(fetch_bundle)
+        user, gist = bundle["user"], bundle["gist"]
+        if user["login"] != username or user["type"] not in ("User", "Organization"):
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} GitHub account mismatch")
+        if gist["owner_login"] != username or not gist["public"]:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Proof gist is not public and owned by this GitHub account")
+        try:
+            proof = json.loads(gist["content"])
+        except Exception:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Invalid wallet proof payload")
+        if str(proof.get("github", "")).lower() != username or str(proof.get("wallet", "")).lower() != wallet.lower():
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} GitHub proof is not bound to this wallet")
+        return {"user": user, "gist_id": gist_id}
+
     @gl.public.write
-    def register_developer(self, github_username: str, display_name: str) -> str:
+    def register_developer(self, github_username: str, display_name: str, proof_gist_id: str) -> str:
         """Register the calling wallet as a developer bound to a GitHub
-        username. Identity is unverified until verify_developer() checks
-        real GitHub evidence."""
+        username. Registration succeeds only after validator-consensus
+        verification of a GitHub-owned, wallet-bound proof gist."""
         self._require_not_paused()
         username = _validate_username(github_username)
         sender = self._sender_hex()
@@ -654,13 +725,17 @@ class ImpactDNA(gl.Contract):
         if self.developer_by_address.get(sender, ""):
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Wallet already has a developer profile")
 
+        proof = self._github_wallet_proof(username, sender, proof_gist_id)
+        user = proof["user"]
+
         record = {
             "github_username": username,
             "display_name": (display_name or username)[:80],
             "wallet": sender,
-            "verified": False,
-            "github_id": 0,
-            "github_created_at": "",
+            "verified": True,
+            "github_id": int(user["id"]),
+            "github_created_at": user["created_at"],
+            "proof_gist_id": proof["gist_id"],
             "total_score": 0,
             "funded_count": 0,
             "total_granted_usdc": "0",
@@ -672,14 +747,14 @@ class ImpactDNA(gl.Contract):
         self.developer_count = u256(int(self.developer_count) + 1)
         self.contributions_per_dev[username] = u256(0)
         self._bump_stat("developers_registered")
-        self._audit("register_developer", sender, {"username": username})
+        self._bump_stat("developers_verified")
+        self._audit("register_developer", sender, {"username": username, "github_id": user["id"], "proof_gist_id": proof["gist_id"]})
         return username
 
     @gl.public.write
-    def verify_developer(self, github_username: str) -> dict:
-        """Verify that the registered GitHub account actually exists by
-        fetching it from the GitHub API inside consensus. Validators
-        independently re-fetch — real evidence, not user-submitted text.
+    def verify_developer(self, github_username: str, proof_gist_id: str) -> dict:
+        """Verify wallet ownership of a GitHub identity using a GitHub-owned
+        proof gist created by the authenticated account through OAuth.
 
         The stable projection (id, login, type, created_at) is agreed
         via strict equality; those fields do not drift between the
@@ -690,28 +765,53 @@ class ImpactDNA(gl.Contract):
         if record["verified"]:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Developer already verified")
         caller = self._sender_hex()
-        if record["wallet"] != caller and not self.curators.get(caller, False):
+        if record["wallet"] != caller:
             raise gl.vm.UserError(
-                f"{ERROR_EXPECTED} Only the profile owner or a curator may verify"
+                f"{ERROR_EXPECTED} Only the profile wallet may verify"
             )
+
+        gist_id = (proof_gist_id or "").strip()
+        if not re.match(r"^[A-Fa-f0-9]{8,64}$", gist_id):
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Invalid GitHub proof gist id")
 
         def fetch_user():
             data = self._fetch_github_json(f"/users/{username}")
             return json.loads(json.dumps(_stable_user_projection(data), sort_keys=True))
 
+        def fetch_gist():
+            data = self._fetch_github_json(f"/gists/{gist_id}")
+            return json.loads(json.dumps(_stable_gist_projection(data), sort_keys=True))
+
         user = gl.eq_principle.strict_eq(fetch_user)
+        gist = gl.eq_principle.strict_eq(fetch_gist)
 
         if user["login"] != username:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} GitHub login mismatch")
         if user["type"] not in ("User", "Organization"):
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Unsupported GitHub account type")
+        if gist["owner_login"] != username:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Proof gist is not owned by the registered GitHub account")
+        if not gist["public"]:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Proof gist must be public")
+        try:
+            proof = json.loads(gist["content"])
+        except Exception:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Invalid wallet proof payload")
+        expected = {"github": username, "wallet": record["wallet"].lower()}
+        actual = {
+            "github": str(proof.get("github", "")).lower(),
+            "wallet": str(proof.get("wallet", "")).lower(),
+        }
+        if actual != expected:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} GitHub proof is not bound to this wallet")
 
         record["verified"] = True
         record["github_id"] = int(user["id"])
         record["github_created_at"] = user["created_at"]
+        record["proof_gist_id"] = gist_id
         self._save("developer", username, record)
         self._bump_stat("developers_verified")
-        self._audit("verify_developer", caller, {"username": username, "github_id": user["id"]})
+        self._audit("verify_developer", caller, {"username": username, "github_id": user["id"], "proof_gist_id": gist_id})
         return {"username": username, "verified": True, "github_id": int(user["id"])}
 
     # =======================================================================
@@ -871,9 +971,13 @@ Return ONLY JSON:
         # can never score originality, and non-owned repos are capped.
         if stable["fork"]:
             dims["originality"] = 0
-            total = min(total, 30)
+            dims = _cap_dimensions(dims, 30)
         if not owner_match:
-            total = min(total, self._min_eligible_score() - 1 if self._min_eligible_score() > 0 else 0)
+            dims = _cap_dimensions(
+                dims,
+                self._min_eligible_score() - 1 if self._min_eligible_score() > 0 else 0,
+            )
+        total = sum(dims.values())
 
         eligible = total >= self._min_eligible_score() and not stable["fork"] and owner_match
 
@@ -1245,7 +1349,7 @@ Return ONLY JSON:
         # epochs do. Any unallocated remainder simply stays recorded on
         # this now-closed epoch (its escrow pool on Base Sepolia keeps
         # the actual USDC — the epoch's opener can withdraw dust there
-        # via ImpactDnaEscrow.withdrawUnallocated).
+        # via ImpactDnaEscrow.withdrawUnallocated after Base settlement).
         remainder = pool - allocated
         if allocated > 0:
             self.reserved_usdc = u256(int(self.reserved_usdc) + allocated)
@@ -1292,18 +1396,20 @@ Return ONLY JSON:
         return {"epoch": epoch_id, "already_processed": False, "grants": len(epoch["grant_ids"])}
 
     @gl.public.write
-    def mark_grant_claimed(self, grant_id: str, base_tx_hash: str) -> dict:
+    def mark_grant_claimed(self, grant_id: str, base_tx_hash: str, event_id: str) -> dict:
         """Relayer-only: mark a grant claimed after observing the Claimed
         event on the Base Sepolia escrow — the escrow holds the real USDC
         and pays the recipient directly; this call only mirrors that fact
         onto the ledger. Idempotent on base_tx_hash."""
         self._require_relayer()
-        if self.processed_base_tx.get(base_tx_hash, False):
+        if not event_id:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Missing claim event id")
+        if self.processed_base_tx.get(event_id, False):
             return {"id": grant_id, "already_processed": True}
-        self.processed_base_tx[base_tx_hash] = True
         grant = self._load("grant", grant_id)
         if grant["claimed"]:
             return {"id": grant_id, "already_processed": True}
+        self.processed_base_tx[event_id] = True
         amount = int(grant["amount_usdc"])
         grant["claimed"] = True
         grant["claim_tx_hash"] = base_tx_hash
@@ -1313,7 +1419,7 @@ Return ONLY JSON:
         self._audit(
             "mark_grant_claimed",
             self._sender_hex(),
-            {"id": grant_id, "usdc": amount, "base_tx_hash": base_tx_hash},
+            {"id": grant_id, "usdc": amount, "base_tx_hash": base_tx_hash, "event_id": event_id},
         )
         return {"id": grant_id, "already_processed": False, "amount_usdc": grant["amount_usdc"]}
 

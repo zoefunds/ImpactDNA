@@ -22,7 +22,7 @@ import { logger } from "../lib/logger.js";
 import { config } from "../config.js";
 import { withLock } from "../redis.js";
 import { IMPACT_DNA_ESCROW_ABI } from "../lib/escrowAbi.js";
-import { getProviderForScan, isEscrowConfigured, relayGrantsToEscrow } from "../services/baseSepolia.js";
+import { getProviderForScan, isEscrowConfigured, relayGrantsToEscrow, reconcileEscrowDeposit } from "../services/baseSepolia.js";
 import {
   isGenlayerRelayConfigured,
   listEpochs,
@@ -30,11 +30,14 @@ import {
   markGrantsRelayedOnGenlayer,
   markGrantClaimedOnGenlayer,
   recordDepositOnGenlayer,
+  listAllGrants,
 } from "../services/genlayerRelay.js";
+import { grantsForClaim } from "./relayLogic.js";
 
 const DEPOSITED_BLOCK_KEY = "relay:lastScannedDepositBlock";
 const CLAIMED_BLOCK_KEY = "relay:lastScannedClaimBlock";
-const MAX_BLOCK_RANGE = 2000;
+// Base's public RPC accepts at most 200 inclusive blocks per eth_getLogs.
+const MAX_BLOCK_RANGE = 199;
 
 async function getSyncState(key: string): Promise<string | null> {
   const res = await query<{ value: string }>("SELECT value FROM relay_sync_state WHERE key = $1", [key]);
@@ -72,16 +75,17 @@ export async function scanDeposits(): Promise<void> {
     for (const ev of events) {
       if (!("args" in ev) || !ev.args) continue;
       const baseTxHash = ev.transactionHash.toLowerCase();
+      const depositId = ev.args.depositId as string;
       const epochId = hashToId.get(ev.args.epochId as string);
       if (!epochId) {
         logger.warn({ escrowEpochHash: ev.args.epochId, baseTxHash }, "deposit event doesn't match any known epoch; skipping");
         continue;
       }
       await query(
-        `INSERT INTO pending_deposits (base_tx_hash, epoch_id, depositor, amount_usdc, block_number)
-         VALUES ($1, $2, $3, $4, $5)
+        `INSERT INTO pending_deposits (base_tx_hash, deposit_id, epoch_id, depositor, amount_usdc, block_number)
+         VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (base_tx_hash) DO NOTHING`,
-        [baseTxHash, epochId, ev.args.from as string, (ev.args.amount as bigint).toString(), ev.blockNumber],
+        [baseTxHash, depositId, epochId, ev.args.from as string, (ev.args.amount as bigint).toString(), ev.blockNumber],
       );
     }
   }
@@ -94,20 +98,23 @@ export async function scanDeposits(): Promise<void> {
 export async function applyPendingDeposits(): Promise<void> {
   const rows = await query<{
     base_tx_hash: string;
+    deposit_id: string;
     epoch_id: string;
     depositor: string;
     amount_usdc: string;
     attempts: number;
   }>(
-    `SELECT base_tx_hash, epoch_id, depositor, amount_usdc, attempts FROM pending_deposits
+    `SELECT base_tx_hash, deposit_id, epoch_id, depositor, amount_usdc, attempts FROM pending_deposits
      WHERE status = 'pending' ORDER BY created_at ASC LIMIT 25`,
   );
   for (const row of rows.rows) {
     try {
-      const txHash = await recordDepositOnGenlayer(row.epoch_id, row.depositor, BigInt(row.amount_usdc), row.base_tx_hash);
+      if (!row.deposit_id) throw new Error("legacy deposit lacks a reconciliation id");
+      const applied = await recordDepositOnGenlayer(row.epoch_id, row.depositor, BigInt(row.amount_usdc), row.deposit_id);
+      const reconciliationTx = await reconcileEscrowDeposit(row.deposit_id, applied.accepted);
       await query(
-        `UPDATE pending_deposits SET status = 'applied', applied_tx = $2, updated_at = now() WHERE base_tx_hash = $1`,
-        [row.base_tx_hash, txHash],
+        `UPDATE pending_deposits SET status = 'applied', applied_tx = $2, reconciliation_tx = $3, updated_at = now() WHERE base_tx_hash = $1`,
+        [row.base_tx_hash, applied.txHash, reconciliationTx],
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -152,27 +159,50 @@ export async function scanClaims(): Promise<void> {
   for (const ev of events) {
     if (!("args" in ev) || !ev.args) continue;
     const baseTxHash = ev.transactionHash.toLowerCase();
-    // The escrow only knows (epochId, recipient) — resolve to a grant id
-    // via GenLayer's grant records is unnecessary here: mark_grant_claimed
-    // takes a grant_id, so instead we look it up by scanning the closed
-    // epoch's grant list for a matching wallet. Cheap: epochs are small.
-    const epochId = ev.args.epochId as string;
-    const recipient = (ev.args.recipient as string).toLowerCase();
-    const { items } = await listEpochs();
-    const epoch = items.find((e) => e.id === epochId || ethers.id(e.id as string) === epochId);
-    if (!epoch) continue;
-    const grantIds = (epoch.grant_ids as string[]) ?? [];
-    for (const gid of grantIds) {
-      const pending = await getGrantsPendingRelay(epoch.id as string).catch(() => []);
-      const match = pending.find((g) => g.id === gid && g.wallet.toLowerCase() === recipient);
-      if (match) {
-        await markGrantClaimedOnGenlayer(gid, baseTxHash).catch((err) =>
-          logger.error({ err, gid, baseTxHash }, "mark_grant_claimed failed; will retry next tick"),
-        );
-      }
-    }
+    const logIndex = Number(ev.index);
+    const eventId = `${baseTxHash}:${logIndex}`;
+    await query(
+      `INSERT INTO pending_claims (event_id, base_tx_hash, epoch_hash, recipient, amount_usdc, block_number, log_index)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (event_id) DO NOTHING`,
+      [eventId, baseTxHash, ev.args.epochId as string, (ev.args.recipient as string).toLowerCase(),
+       (ev.args.amount as bigint).toString(), ev.blockNumber, logIndex],
+    );
   }
   await setSyncState(CLAIMED_BLOCK_KEY, String(toBlock));
+}
+
+export async function applyPendingClaims(): Promise<void> {
+  const pending = await query<{
+    event_id: string; base_tx_hash: string; epoch_hash: string; recipient: string; amount_usdc: string;
+  }>(`SELECT event_id, base_tx_hash, epoch_hash, recipient, amount_usdc FROM pending_claims
+      WHERE status = 'pending' ORDER BY block_number, log_index LIMIT 50`);
+  if (!pending.rowCount) return;
+  const [grants, epochs] = await Promise.all([listAllGrants(), listEpochs()]);
+  const epochByHash = new Map(epochs.items.map((e) => [ethers.id(String(e.id)), String(e.id)]));
+  for (const row of pending.rows) {
+    try {
+      const epochId = epochByHash.get(row.epoch_hash);
+      if (!epochId) throw new Error(`unknown epoch hash ${row.epoch_hash}`);
+      const matches = grantsForClaim(grants, epochId, row.recipient, BigInt(row.amount_usdc), row.base_tx_hash);
+      if (!matches.length) {
+        throw new Error(`complete grant records do not match claim ${row.event_id}`);
+      }
+      let txHash = "";
+      for (const match of matches) {
+        if (match.claimed) continue;
+        txHash = await markGrantClaimedOnGenlayer(match.id, row.base_tx_hash, `${row.event_id}:${match.id}`);
+        match.claimed = true;
+        match.claim_tx_hash = row.base_tx_hash;
+      }
+      await query(`UPDATE pending_claims SET status='applied', grant_id=$2, applied_tx=$3, updated_at=now() WHERE event_id=$1`,
+        [row.event_id, matches.map((g) => g.id).join(","), txHash || "already-applied"]);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await query(`UPDATE pending_claims SET attempts=attempts+1, last_error=$2, updated_at=now() WHERE event_id=$1`,
+        [row.event_id, message]);
+      logger.error({ err: message, eventId: row.event_id }, "claim acknowledgment failed; persisted for retry");
+    }
+  }
 }
 
 export async function runRelayTick(): Promise<void> {
@@ -182,6 +212,7 @@ export async function runRelayTick(): Promise<void> {
     await applyPendingDeposits().catch((err) => logger.error({ err }, "applyPendingDeposits failed"));
     await relayClosedEpochGrants().catch((err) => logger.error({ err }, "relayClosedEpochGrants failed"));
     await scanClaims().catch((err) => logger.error({ err }, "scanClaims failed"));
+    await applyPendingClaims().catch((err) => logger.error({ err }, "applyPendingClaims failed"));
   });
 }
 

@@ -29,8 +29,16 @@ contract ImpactDnaEscrow {
     // ------------------------------------------------------------------
     struct Pool {
         uint256 deposited;   // total USDC ever deposited under this epoch id
+        uint256 accepted;    // deposits reconciled while the GenLayer epoch was open
         uint256 allocated;   // total USDC committed to grants via setGrants
         bool grantsSet;      // true once setGrants has run (idempotency gate)
+    }
+
+    struct DepositRecord {
+        bytes32 epochId;
+        address depositor;
+        uint256 amount;
+        uint8 status; // 0 unknown, 1 pending, 2 accepted, 3 refundable, 4 refunded
     }
 
     IERC20 public immutable usdc;
@@ -39,14 +47,18 @@ contract ImpactDnaEscrow {
 
     mapping(bytes32 => Pool) public pools;                          // epochId => pool
     mapping(bytes32 => mapping(address => uint256)) public claimable; // epochId => recipient => USDC owed
+    mapping(bytes32 => mapping(address => uint256)) public granted;   // immutable assigned total for reconciliation
     mapping(address => uint256) public totalClaimable;               // recipient => USDC owed across ALL epochs
+    mapping(bytes32 => DepositRecord) public deposits;                // client-generated unique deposit id => record
 
     bool private _locked; // reentrancy guard
 
     // ------------------------------------------------------------------
     // Events
     // ------------------------------------------------------------------
-    event Deposited(bytes32 indexed epochId, address indexed from, uint256 amount);
+    event Deposited(bytes32 indexed epochId, bytes32 indexed depositId, address indexed from, uint256 amount);
+    event DepositReconciled(bytes32 indexed depositId, bool accepted);
+    event DepositRefunded(bytes32 indexed depositId, address indexed depositor, uint256 amount);
     event GrantsSet(bytes32 indexed epochId, uint256 recipientCount, uint256 totalAllocated);
     event Claimed(bytes32 indexed epochId, address indexed recipient, uint256 amount);
     event RelayerUpdated(address indexed newRelayer);
@@ -87,12 +99,43 @@ contract ImpactDnaEscrow {
     // Funding — anyone can deposit USDC into a funding epoch's pool. Caller
     // must have approved this contract for `amount` beforehand.
     // ------------------------------------------------------------------
-    function deposit(bytes32 epochId, uint256 amount) external nonReentrant {
+    function deposit(bytes32 epochId, bytes32 depositId, uint256 amount) external nonReentrant {
         require(amount > 0, "ImpactDnaEscrow: amount must be > 0");
+        require(depositId != bytes32(0), "ImpactDnaEscrow: zero deposit id");
+        require(deposits[depositId].status == 0, "ImpactDnaEscrow: duplicate deposit id");
+        require(!pools[epochId].grantsSet, "ImpactDnaEscrow: epoch settled");
         bool ok = usdc.transferFrom(msg.sender, address(this), amount);
         require(ok, "ImpactDnaEscrow: USDC transferFrom failed");
         pools[epochId].deposited += amount;
-        emit Deposited(epochId, msg.sender, amount);
+        deposits[depositId] = DepositRecord(epochId, msg.sender, amount, 1);
+        emit Deposited(epochId, depositId, msg.sender, amount);
+    }
+
+    /// @notice Reconcile a confirmed deposit against the GenLayer epoch.
+    /// Late deposits become exactly refundable instead of being stranded.
+    function reconcileDeposit(bytes32 depositId, bool accepted) external onlyRelayer {
+        DepositRecord storage item = deposits[depositId];
+        require(item.status == 1, "ImpactDnaEscrow: deposit not pending");
+        if (accepted) {
+            require(!pools[item.epochId].grantsSet, "ImpactDnaEscrow: epoch settled");
+            item.status = 2;
+            pools[item.epochId].accepted += item.amount;
+        } else {
+            item.status = 3;
+        }
+        emit DepositReconciled(depositId, accepted);
+    }
+
+    function refundDeposit(bytes32 depositId) external nonReentrant {
+        DepositRecord storage item = deposits[depositId];
+        require(item.depositor == msg.sender, "ImpactDnaEscrow: not depositor");
+        require(item.status == 3, "ImpactDnaEscrow: not refundable");
+        uint256 amount = item.amount;
+        item.status = 4;
+        pools[item.epochId].deposited -= amount;
+        bool ok = usdc.transfer(msg.sender, amount);
+        require(ok, "ImpactDnaEscrow: USDC transfer failed");
+        emit DepositRefunded(depositId, msg.sender, amount);
     }
 
     // ------------------------------------------------------------------
@@ -118,7 +161,7 @@ contract ImpactDnaEscrow {
             total += amounts[i];
         }
         require(
-            total <= pool.deposited - pool.allocated,
+            total <= pool.accepted - pool.allocated,
             "ImpactDnaEscrow: total exceeds undeposited/unallocated pool"
         );
 
@@ -128,6 +171,7 @@ contract ImpactDnaEscrow {
         for (uint256 i = 0; i < recipients.length; i++) {
             if (amounts[i] == 0) continue;
             claimable[epochId][recipients[i]] += amounts[i];
+            granted[epochId][recipients[i]] += amounts[i];
             totalClaimable[recipients[i]] += amounts[i];
         }
 
@@ -189,9 +233,11 @@ contract ImpactDnaEscrow {
     function withdrawUnallocated(bytes32 epochId, address to, uint256 amount) external onlyOwner nonReentrant {
         require(to != address(0), "ImpactDnaEscrow: zero recipient");
         Pool storage pool = pools[epochId];
-        uint256 available = pool.deposited - pool.allocated;
+        require(pool.grantsSet, "ImpactDnaEscrow: active epoch collateral locked");
+        uint256 available = pool.accepted - pool.allocated;
         require(amount <= available, "ImpactDnaEscrow: exceeds unallocated amount");
         pool.deposited -= amount;
+        pool.accepted -= amount;
         bool ok = usdc.transfer(to, amount);
         require(ok, "ImpactDnaEscrow: USDC transfer failed");
         emit UnallocatedWithdrawn(epochId, to, amount);
@@ -207,5 +253,14 @@ contract ImpactDnaEscrow {
 
     function getClaimable(bytes32 epochId, address recipient) external view returns (uint256) {
         return claimable[epochId][recipient];
+    }
+
+    function getGranted(bytes32 epochId, address recipient) external view returns (uint256) {
+        return granted[epochId][recipient];
+    }
+
+    function getPoolState(bytes32 epochId) external view returns (uint256 deposited, uint256 accepted, uint256 allocated, bool grantsSet) {
+        Pool storage pool = pools[epochId];
+        return (pool.deposited, pool.accepted, pool.allocated, pool.grantsSet);
     }
 }

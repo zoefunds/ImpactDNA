@@ -84,12 +84,45 @@ export async function relayGrantsToEscrow(epochId: string, grants: OnchainGrant[
   const amounts = nonZero.map((g) => BigInt(g.amount_usdc));
   const key = epochIdToBytes32(epochId);
 
+  const existing = await getEscrowPool(epochId);
+  if (existing.grantsSet) {
+    const expected = amounts.reduce((sum, amount) => sum + amount, BigInt(0));
+    if (BigInt(existing.allocated) !== expected) {
+      throw new Error(`Base allocation mismatch for ${epochId}: expected ${expected}, found ${existing.allocated}`);
+    }
+    const expectedByWallet = new Map<string, bigint>();
+    for (let i = 0; i < addresses.length; i++) {
+      const wallet = addresses[i].toLowerCase();
+      expectedByWallet.set(wallet, (expectedByWallet.get(wallet) ?? BigInt(0)) + amounts[i]);
+    }
+    for (const [wallet, expectedWalletAmount] of expectedByWallet) {
+      const assigned = BigInt(await getEscrowGranted(epochId, wallet));
+      if (assigned !== expectedWalletAmount) {
+        throw new Error(`Base assigned-grant mismatch for ${epochId}/${wallet}`);
+      }
+    }
+    const filter = contract.filters.GrantsSet(key);
+    const events = await contract.queryFilter(filter, 0, "latest");
+    const event = events.at(-1);
+    if (!event) throw new Error(`Base reports grants set for ${epochId} but no GrantsSet event was found`);
+    logger.info({ epochId, txHash: event.transactionHash }, "reconciled existing Base grant allocation");
+    return event.transactionHash;
+  }
+
   const tx = await contract.setGrants(key, addresses, amounts);
   logger.info({ epochId, txHash: tx.hash, grantCount: addresses.length }, "relaying grants to Base Sepolia escrow");
   const receipt = await tx.wait();
   if (!receipt || receipt.status !== 1) {
     throw new Error(`setGrants transaction failed for epoch ${epochId}`);
   }
+  return tx.hash as string;
+}
+
+export async function reconcileEscrowDeposit(depositId: string, accepted: boolean): Promise<string> {
+  const contract = getRelayerContract();
+  const tx = await contract.reconcileDeposit(depositId, accepted);
+  const receipt = await tx.wait();
+  if (!receipt || receipt.status !== 1) throw new Error(`deposit reconciliation failed for ${depositId}`);
   return tx.hash as string;
 }
 
@@ -108,6 +141,13 @@ export async function getEscrowClaimable(epochId: string, address: string) {
   const contract = getReadContract();
   const key = epochIdToBytes32(epochId);
   const amount = await contract.getClaimable(key, address);
+  return (amount as bigint).toString();
+}
+
+export async function getEscrowGranted(epochId: string, address: string) {
+  const contract = getReadContract();
+  const key = epochIdToBytes32(epochId);
+  const amount = await contract.getGranted(key, address);
   return (amount as bigint).toString();
 }
 

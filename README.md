@@ -1,23 +1,25 @@
 # ImpactDNA
 
+Milestone remediation and reproducible regression evidence: [docs/MILESTONE-REMEDIATION.md](docs/MILESTONE-REMEDIATION.md).
+
 **Retroactive Public Goods Funding on GenLayer, funded in USDC on Base Sepolia.**
 
 ImpactDNA flips the traditional grants model: instead of funding proposals before work begins, it evaluates open-source repositories *after* release and rewards the ones that became genuinely foundational. The subjective judgment — is this work original, adopted, influential? — is performed entirely by a **GenLayer Intelligent Contract**: validators independently fetch live GitHub evidence and score impact with LLM reasoning, reaching consensus before anything is recorded or funded. Real money moves on **Base Sepolia**, in **USDC**, through a dedicated escrow contract; GenLayer is the authoritative ledger and a backend relayer bridges the two chains.
-
-![Landing page](docs/screenshots/landing.png)
 
 ## Live deployment
 
 | Component | URL / Address |
 |---|---|
 | **Web app** | [impactdna.vercel.app](https://impactdna.vercel.app) |
-| **REST API** (24/7, health-checked) | [impactdna-api-v2.fly.dev](https://impactdna-api-v2.fly.dev) |
-| **GenLayer Intelligent Contract** | [`0xC670690Cd75C3bD06710c85A13bAE99A2AC4faA4`](https://studio.genlayer.com) — GenLayer StudioNet (gasless) |
-| **Base Sepolia escrow** | [`0x1C588195832F87496cE797C7C28c82F532d95E4E`](https://sepolia.basescan.org) — `ImpactDnaEscrow.sol` |
+| **REST API** (24/7, health-checked) | [impactdna-milestone-api.fly.dev](https://impactdna-milestone-api.fly.dev) |
+| **GenLayer Intelligent Contract** | [`0x18de100d155851cb179a6dF17f301C158aDed0AC`](https://studio.genlayer.com) — GenLayer StudioNet (gasless) |
+| **Base Sepolia escrow** | [`0xB5777c54047DF43024650197B560A227e35f25B8`](https://sepolia.basescan.org/address/0xB5777c54047DF43024650197B560A227e35f25B8) — `ImpactDnaEscrow.sol` |
 | **USDC (Base Sepolia)** | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
 | **Owner / relayer / first curator** | `0x7401c129EDfc26E68FE19309fE461eb3Db1058Eb` |
 
-Constructor: `platform_name="Impact_DNA"`, `min_eligible_score=10` (owner-adjustable).
+The verified Base Sepolia deposit-to-claim transaction chain is documented in [`docs/MILESTONE-REMEDIATION.md`](docs/MILESTONE-REMEDIATION.md#live-base-sepolia-deposit-to-claim-evidence).
+
+Constructor: `platform_name="ImpactDNA"`, `min_eligible_score=40` (owner-adjustable).
 
 This is a full relaunch (2026-09-13) of an earlier native-GEN, email/password version — see [Current stage & path forward](#current-stage--path-forward) for what changed and why.
 
@@ -97,22 +99,10 @@ An off-chain AI could score repositories, but there would be no way to verify th
 
 GenLayer's own EVM-compatibility layer can move its native GEN token, but not an ERC20 on another chain — so real USDC custody lives in `ImpactDnaEscrow.sol` on Base Sepolia, and a single backend relayer bridges the two chains (the same pattern used by this project's sibling `meme-olympics` and `Event-Weaver` builds):
 
-- **Deposits**: anyone calls `ImpactDnaEscrow.deposit(epochId, amount)` (standard ERC20 approve + deposit). The relayer scans for confirmed `Deposited` events, resolves the escrow's `bytes32` key back to a GenLayer epoch id, and calls `record_deposit(epoch_id, depositor, amount, base_tx_hash)` — idempotent on `base_tx_hash`, so a retried relay sweep can never double-count a deposit.
+- **Deposits**: anyone calls `ImpactDnaEscrow.deposit(epochId, depositId, amount)` (standard ERC20 approve + deposit). The relayer resolves the epoch and calls `record_deposit(epoch_id, depositor, amount, deposit_id)`, then reconciles the same exact Base deposit as accepted or refundable. This closes the cross-chain epoch-close race without stranding funds.
 - **Settlement relay**: once a curator (or the epoch's own opener) closes an epoch, the relayer reads `get_grants_pending_relay(epoch_id)` and pushes the recipient list to `ImpactDnaEscrow.setGrants(...)` — the contract rejects a second call for the same epoch, so a retry after a partial failure is always safe.
-- **Claims**: a grant recipient calls `ImpactDnaEscrow.claim(epochId)` directly with their own wallet — the escrow holds the real USDC and pays out itself; the relayer only mirrors the `Claimed` event back onto GenLayer (`mark_grant_claimed`) so the dashboard shows accurate status.
+- **Claims**: a grant recipient calls `ImpactDnaEscrow.claim(epochId)` directly with their own wallet — the escrow holds the real USDC and pays out itself; durable relayer event rows mirror every `Claimed` log against complete grant records so failures and multi-claim transactions are retryable.
 - **No custodial keys anywhere in this path.** Deposits and claims are signed by the user's own connected wallet; only the relayer's own bridging calls (`record_deposit`, `mark_grants_relayed`, `mark_grant_claimed`) use a dedicated backend key, which must be set as the contract's `relayer` (`set_relayer`) on GenLayer and the escrow's `relayer` on Base Sepolia.
-
-## Screenshots
-
-| Dashboard | Contribution Explorer |
-|---|---|
-| ![Dashboard](docs/screenshots/dashboard.png) | ![Contribution Explorer](docs/screenshots/contribution-explorer.png) |
-
-| Funding Explorer | Curator Admin panel |
-|---|---|
-| ![Funding Explorer](docs/screenshots/funding-explorer.png) | ![Admin panel](docs/screenshots/admin-panel.png) |
-
-*(Screenshots predate this relaunch and still show the old email/GEN UI — refresh pending.)*
 
 ## Epochs are permissionless
 
@@ -209,20 +199,20 @@ The same operations are available directly against the contract for scripted or 
 
 ```bash
 # Open a permissionless epoch (any wallet)
-genlayer write 0xC670…4aA4 open_epoch --args "Season 1"
+genlayer write 0x18de100d155851cb179a6dF17f301C158aDed0AC open_epoch --args "Season 1"
 
 # Anyone deposits USDC into it on Base Sepolia (ImpactDnaEscrow.deposit),
 # which the relayer picks up and credits to the epoch automatically.
 
 # Close epoch — deterministic quadratic settlement (opener or curator)
-genlayer write 0xC670…4aA4 close_epoch --args e-1
+genlayer write 0x18de100d155851cb179a6dF17f301C158aDed0AC close_epoch --args e-1
 
 # Resolve any open appeals / run a manipulation screen (curator)
-genlayer write 0xC670…4aA4 resolve_appeal --args a-1
-genlayer write 0xC670…4aA4 detect_manipulation --args c-1
+genlayer write 0x18de100d155851cb179a6dF17f301C158aDed0AC resolve_appeal --args a-1
+genlayer write 0x18de100d155851cb179a6dF17f301C158aDed0AC detect_manipulation --args c-1
 
 # Adjust the eligibility gate (owner only)
-genlayer write 0xC670…4aA4 set_min_eligible_score --args 40
+genlayer write 0x18de100d155851cb179a6dF17f301C158aDed0AC set_min_eligible_score --args 40
 ```
 
 ## Current stage & path forward

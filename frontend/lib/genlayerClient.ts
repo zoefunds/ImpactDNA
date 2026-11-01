@@ -56,11 +56,18 @@ export async function genlayerWrite(
   } as never);
   const receipt = await client.waitForTransactionReceipt({
     hash: txHash,
-    status: "ACCEPTED" as never,
+    status: "FINALIZED" as never,
     retries: 60,
     interval: 3000,
   } as never);
   const r = receipt as unknown as Record<string, unknown>;
+  const status = String(r?.statusName ?? r?.status ?? "").toUpperCase();
+  if (status !== "FINALIZED") {
+    throw new Error(`GenLayer transaction did not execute successfully (${status || "unknown status"})`);
+  }
+  if (r?.consensus_data && typeof r.consensus_data === "object" && "error" in (r.consensus_data as object)) {
+    throw new Error(String((r.consensus_data as Record<string, unknown>).error));
+  }
   return { txHash: String(txHash), result: r?.consensus_data ?? null };
 }
 

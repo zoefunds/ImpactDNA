@@ -1,5 +1,7 @@
 # ImpactDNA — V1 Milestone: Wallet-Connect & USDC Relaunch
 
+> Historical milestone, superseded by the 2026-11-01 remediation release. The deployment table and infrastructure section below reflect the current live testnet stack; see `docs/MILESTONE-REMEDIATION.md` for the new safety guarantees and verified transaction chain.
+
 **Date:** 2026-09-13
 **Commit:** `be73630`
 **Repo:** [github.com/zoefunds/ImpactDNA](https://github.com/zoefunds/ImpactDNA)
@@ -56,7 +58,7 @@ relaunch — this is a fresh start, not a migration.
 
 - New Solidity contract **`contracts/base/ImpactDnaEscrow.sol`**: holds
   real USDC per funding epoch, no external dependencies. `deposit(epochId,
-  amount)` (standard ERC20 approve + deposit), relayer-only
+  depositId, amount)` (standard ERC20 approve + deposit), relayer-only
   `setGrants(epochId, recipients, amounts)` (one-shot per epoch), and
   self-serve `claim(epochId)` / `claimMany(epochIds)`.
 - GenLayer contract (`contracts/impact_dna.py`) rewritten as the
@@ -90,9 +92,9 @@ relaunch — this is a fresh start, not a migration.
 
 ### 5. Infrastructure migration
 
-- New Fly.io app **`impactdna-api-v2`** (the prior `impactdna-api` app was
-  on an account access to which was lost) with a fresh Fly Postgres
-  cluster (`impactdna-db`) — no data carried over, by design.
+- Current Fly.io app **`impactdna-milestone-api`** with Fly Postgres
+  **`impactdna-milestone-db`**. The earlier app is absent from the
+  authenticated Fly account; no data was carried over.
 - Frontend redeployed to the existing Vercel project
   (`impactdna.vercel.app`) with new `NEXT_PUBLIC_*` env vars for the
   contract, USDC, and escrow addresses.
@@ -121,19 +123,18 @@ relaunch — this is a fresh start, not a migration.
 
 | Chain | Contract | Address |
 |---|---|---|
-| GenLayer StudioNet (61999) | ImpactDNA | `0xC670690Cd75C3bD06710c85A13bAE99A2AC4faA4` |
-| Base Sepolia (84532) | ImpactDnaEscrow | `0x1C588195832F87496cE797C7C28c82F532d95E4E` |
+| GenLayer StudioNet (61999) | ImpactDNA | `0x18de100d155851cb179a6dF17f301C158aDed0AC` |
+| Base Sepolia (84532) | ImpactDnaEscrow | `0xB5777c54047DF43024650197B560A227e35f25B8` |
 | Base Sepolia (84532) | USDC | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
 
 ## Verification performed
 
-- GenLayer contract: `genvm-lint check` clean, 7/7 unit tests passing
+- GenLayer contract: 12/12 unit tests passing
   (covers the full open-epoch → deposit → submit → evaluate → close →
   relay → claim lifecycle, including permissionless-epoch access control).
-- Backend: `tsc` builds clean; live end-to-end smoke test against the
-  deployed contract (`open_epoch` → consensus ACCEPTED → epoch visible
-  on-chain); relay loop confirmed picking up a real deposit and applying
-  it to GenLayer within seconds (Fly logs).
+- Backend: TypeScript build and 6/6 relay tests pass; migrations `001`–`008`
+  are applied in production. A complete Base deposit → GenLayer record →
+  Base allocation → claim → GenLayer acknowledgement run is documented.
 - Frontend: production builds clean; wallet-connect modal, funding page
   (epoch open/deposit), and dashboard verified live in-browser against
   the production deployment.

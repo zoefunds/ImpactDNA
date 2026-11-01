@@ -11,3 +11,5 @@ coverage/
 __pycache__/
 *.pyc
 frontend/tsconfig.tsbuildinfo
+contracts/base/out/
+contracts/base/cache/

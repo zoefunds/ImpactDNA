@@ -1,6 +1,6 @@
 # API Reference
 
-Base URL: `https://impactdna-api-v2.fly.dev` (local: `http://localhost:8080`)
+Base URL: `https://impactdna-milestone-api.fly.dev` (local: `http://localhost:8080`)
 
 Auth: `Authorization: Bearer <accessToken>` unless marked public.
 All bodies are JSON. Errors: `{ "error": "message" }` with 4xx/5xx status.
@@ -49,5 +49,5 @@ Opening/closing epochs, depositing, and claiming are **not** here — those are 
 
 ## On-chain (client-signed directly, no backend endpoint)
 These are called by the frontend directly against the deployed contracts — listed here for completeness:
-- **GenLayer** (`genlayer-js`, connected wallet): `register_developer`, `verify_developer`, `submit_contribution(repo, category, description, epoch_id)`, `evaluate_contribution`, `request_appeal`, `open_epoch(label)`, `close_epoch(epoch_id)`.
-- **Base Sepolia `ImpactDnaEscrow`** (wagmi, connected wallet): `deposit(epochId, amount)` (after an ERC20 `approve`), `claim(epochId)`.
+- **GenLayer** (`genlayer-js`, connected wallet): `register_developer(github_username, display_name, proof_gist_id)` (wallet-bound GitHub proof), `verify_developer` (legacy unverified profiles), `submit_contribution(repo, category, description, epoch_id)`, `evaluate_contribution`, `request_appeal`, `open_epoch(label)`, `close_epoch(epoch_id)`.
+- **Base Sepolia `ImpactDnaEscrow`** (wagmi, connected wallet): `deposit(epochId, depositId, amount)` (after an ERC20 `approve`), `refundDeposit(depositId)`, `claim(epochId)`, and `claimMany(epochIds)`.

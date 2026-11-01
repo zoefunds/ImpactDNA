@@ -1,7 +1,7 @@
 "use client";
 
 import { readContract, writeContract, waitForTransactionReceipt, getAccount } from "@wagmi/core";
-import { keccak256, toHex } from "viem";
+import { bytesToHex, keccak256, toHex } from "viem";
 import { wagmiConfig } from "./wallet";
 import { ensureChain, BASE_SEPOLIA } from "./chainSwitch";
 
@@ -26,7 +26,8 @@ const ERC20_ABI = [
 ] as const;
 
 const ESCROW_ABI = [
-  { type: "function", name: "deposit", stateMutability: "nonpayable", inputs: [{ name: "epochId", type: "bytes32" }, { name: "amount", type: "uint256" }], outputs: [] },
+  { type: "function", name: "deposit", stateMutability: "nonpayable", inputs: [{ name: "epochId", type: "bytes32" }, { name: "depositId", type: "bytes32" }, { name: "amount", type: "uint256" }], outputs: [] },
+  { type: "function", name: "refundDeposit", stateMutability: "nonpayable", inputs: [{ name: "depositId", type: "bytes32" }], outputs: [] },
   { type: "function", name: "claim", stateMutability: "nonpayable", inputs: [{ name: "epochId", type: "bytes32" }], outputs: [] },
   { type: "function", name: "getClaimable", stateMutability: "view", inputs: [{ name: "epochId", type: "bytes32" }, { name: "recipient", type: "address" }], outputs: [{ type: "uint256" }] },
   { type: "function", name: "getPool", stateMutability: "view", inputs: [{ name: "epochId", type: "bytes32" }], outputs: [{ name: "deposited", type: "uint256" }, { name: "allocated", type: "uint256" }, { name: "grantsSet", type: "bool" }] },
@@ -64,17 +65,20 @@ export async function depositUsdc(epochId: string, amountUnits: bigint): Promise
       functionName: "approve",
       args: [ESCROW_ADDRESS, amountUnits],
     });
-    await waitForTransactionReceipt(wagmiConfig, { hash: approveHash });
+    const approval = await waitForTransactionReceipt(wagmiConfig, { hash: approveHash });
+    if (approval.status !== "success") throw new Error("USDC approval reverted");
   }
 
   const key = epochIdToBytes32(epochId);
+  const depositId = bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
   const depositHash = await writeContract(wagmiConfig, {
     address: ESCROW_ADDRESS,
     abi: ESCROW_ABI,
     functionName: "deposit",
-    args: [key, amountUnits],
+    args: [key, depositId, amountUnits],
   });
-  await waitForTransactionReceipt(wagmiConfig, { hash: depositHash });
+  const receipt = await waitForTransactionReceipt(wagmiConfig, { hash: depositHash });
+  if (receipt.status !== "success") throw new Error("USDC deposit reverted");
   return depositHash;
 }
 
@@ -88,7 +92,8 @@ export async function claimGrant(epochId: string): Promise<string> {
     functionName: "claim",
     args: [key],
   });
-  await waitForTransactionReceipt(wagmiConfig, { hash });
+  const receipt = await waitForTransactionReceipt(wagmiConfig, { hash });
+  if (receipt.status !== "success") throw new Error("Grant claim reverted");
   return hash;
 }
 

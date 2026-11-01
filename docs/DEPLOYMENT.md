@@ -2,7 +2,7 @@
 
 ## 1. GenLayer Intelligent Contract
 
-Deployed to StudioNet at `0xC670690Cd75C3bD06710c85A13bAE99A2AC4faA4`.
+Deployed to StudioNet at `0x18de100d155851cb179a6dF17f301C158aDed0AC`.
 
 To redeploy (e.g. after changes):
 1. Open https://studio.genlayer.com, create/select an account.
@@ -21,7 +21,7 @@ genlayer write <ADDR> open_epoch --args "Genesis Round"
 
 ## 2. Base Sepolia escrow (`ImpactDnaEscrow.sol`)
 
-Deployed at `0x1C588195832F87496cE797C7C28c82F532d95E4E` (USDC `0x036CbD53842c5426634e7929541eC2318f3dCF7e`, relayer `0x7401c129EDfc26E68FE19309fE461eb3Db1058Eb`).
+Deployed at `0xB5777c54047DF43024650197B560A227e35f25B8` (USDC `0x036CbD53842c5426634e7929541eC2318f3dCF7e`, relayer `0x7401c129EDfc26E68FE19309fE461eb3Db1058Eb`).
 
 To redeploy:
 ```bash
@@ -39,9 +39,9 @@ Prints the addresses to set as `IMPACT_DNA_ESCROW_ADDRESS` (backend) and `NEXT_P
 
 ```bash
 cd backend
-fly apps create impactdna-api-v2                              # first time only
-fly postgres create --name impactdna-db --region iad          # fresh managed Postgres
-fly postgres attach impactdna-db --app impactdna-api-v2       # sets DATABASE_URL secret
+fly apps create impactdna-milestone-api                       # first time only
+fly postgres create --name impactdna-milestone-db --region iad # first time only
+fly postgres attach impactdna-milestone-db --app impactdna-milestone-api # sets DATABASE_URL secret
 
 fly secrets set \
   JWT_SECRET="$(openssl rand -hex 32)" \
@@ -49,23 +49,23 @@ fly secrets set \
   CORS_ORIGINS="https://impactdna.vercel.app" \
   GENLAYER_RPC_URL="https://studio.genlayer.com/api" \
   GENLAYER_NETWORK="studionet" \
-  GENLAYER_CONTRACT_ADDRESS="0xC670690Cd75C3bD06710c85A13bAE99A2AC4faA4" \
+  GENLAYER_CONTRACT_ADDRESS="0x18de100d155851cb179a6dF17f301C158aDed0AC" \
   GENLAYER_OPERATOR_PRIVATE_KEY="0x..." \
   BASE_SEPOLIA_RPC_URL="https://sepolia.base.org" \
   BASE_SEPOLIA_RELAYER_PRIVATE_KEY="0x..." \
   USDC_CONTRACT_ADDRESS="0x036CbD53842c5426634e7929541eC2318f3dCF7e" \
-  IMPACT_DNA_ESCROW_ADDRESS="0x1C588195832F87496cE797C7C28c82F532d95E4E" \
+  IMPACT_DNA_ESCROW_ADDRESS="0xB5777c54047DF43024650197B560A227e35f25B8" \
   BREVO_API_KEY="xkeysib-…" \
   BREVO_SENDER_EMAIL="preciousmofeoluwa@gmail.com" \
   GITHUB_CLIENT_ID="…" \
   GITHUB_CLIENT_SECRET="…" \
-  GITHUB_OAUTH_CALLBACK_URL="https://impactdna-api-v2.fly.dev/api/auth/github/callback" \
+  GITHUB_OAUTH_CALLBACK_URL="https://impactdna-milestone-api.fly.dev/api/auth/github/callback" \
   REDIS_URL="rediss://…upstash…"
 
 fly deploy
 fly ips allocate-v4 --shared      # only if the first deploy's IP auto-provisioning fails
 fly ips allocate-v6
-curl https://impactdna-api-v2.fly.dev/health
+curl https://impactdna-milestone-api.fly.dev/health
 ```
 
 `GENLAYER_OPERATOR_PRIVATE_KEY` and `BASE_SEPOLIA_RELAYER_PRIVATE_KEY` can be
@@ -82,7 +82,7 @@ Migrations run automatically at boot.
 
 Register one at github.com/settings/developers → New OAuth App:
 - Homepage URL: your Vercel domain
-- Authorization callback URL: `https://impactdna-api-v2.fly.dev/api/auth/github/callback`
+- Authorization callback URL: `https://impactdna-milestone-api.fly.dev/api/auth/github/callback`
 
 Put the Client ID/Secret in the `fly secrets set` command above. This is
 never the login method (wallet-connect is) — it only links a verified
@@ -101,10 +101,10 @@ confirm it's picked up the config; its absence means the relay loop is active.
 ```bash
 cd frontend
 vercel link
-vercel env add NEXT_PUBLIC_API_URL production                       # https://impactdna-api-v2.fly.dev
-vercel env add NEXT_PUBLIC_GENLAYER_CONTRACT_ADDRESS production     # 0xC670690Cd75C3bD06710c85A13bAE99A2AC4faA4
+vercel env add NEXT_PUBLIC_API_URL production                       # https://impactdna-milestone-api.fly.dev
+vercel env add NEXT_PUBLIC_GENLAYER_CONTRACT_ADDRESS production     # 0x18de100d155851cb179a6dF17f301C158aDed0AC
 vercel env add NEXT_PUBLIC_USDC_CONTRACT_ADDRESS production         # 0x036CbD53842c5426634e7929541eC2318f3dCF7e
-vercel env add NEXT_PUBLIC_IMPACT_DNA_ESCROW_ADDRESS production     # 0x1C588195832F87496cE797C7C28c82F532d95E4E
+vercel env add NEXT_PUBLIC_IMPACT_DNA_ESCROW_ADDRESS production     # 0xB5777c54047DF43024650197B560A227e35f25B8
 vercel --prod
 ```
 

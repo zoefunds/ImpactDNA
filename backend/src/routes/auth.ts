@@ -15,6 +15,7 @@ import {
   verifyOAuthState,
   buildAuthorizeUrl,
   exchangeCodeForProfile,
+  createWalletProofGist,
 } from "../lib/githubOAuth.js";
 
 export const authRouter = Router();
@@ -45,6 +46,7 @@ function publicUser(row: Record<string, unknown>) {
     displayName: row.display_name,
     email: row.email,
     githubUsername: row.github_username,
+    githubProofGistId: row.github_proof_gist_id,
     role: row.role,
     createdAt: row.created_at,
   };
@@ -206,11 +208,20 @@ authRouter.get(
     );
     if (taken.rowCount) return fail("github_account_already_linked");
 
+    const user = await query("SELECT wallet_address FROM users WHERE id = $1", [userId]);
+    if (!user.rowCount) return fail("user_not_found");
+    let proofGistId: string;
+    try {
+      proofGistId = await createWalletProofGist(profile.accessToken, profile.login, String(user.rows[0].wallet_address));
+    } catch (err) {
+      logger.warn({ err }, "github wallet proof creation failed");
+      return fail("github_proof_creation_failed");
+    }
     await query(
-      "UPDATE users SET github_username = $1, github_id = $2, updated_at = now() WHERE id = $3",
-      [profile.login, profile.id, userId],
+      "UPDATE users SET github_username = $1, github_id = $2, github_proof_gist_id = $3, updated_at = now() WHERE id = $4",
+      [profile.login, profile.id, proofGistId, userId],
     );
-    await audit(userId, "github_linked", req.ip, { githubId: profile.id, login: profile.login });
+    await audit(userId, "github_linked", req.ip, { githubId: profile.id, login: profile.login, proofGistId });
     res.redirect(`${config.FRONTEND_URL}/dashboard?github=connected`);
   }),
 );

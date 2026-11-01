@@ -61,12 +61,25 @@ def user_payload(username, **overrides):
     return body
 
 
-def install_web_get(monkeypatch, *, repo=None, user=None):
+def gist_payload(gist_id, username, wallet, **overrides):
+    body = {
+        "id": gist_id,
+        "public": True,
+        "owner": {"login": username},
+        "files": {"impactdna-wallet-proof.json": {"content": json.dumps({"github": username, "wallet": wallet.lower()})}},
+    }
+    body.update(overrides)
+    return body
+
+
+def install_web_get(monkeypatch, *, repo=None, user=None, gist=None):
     def _get(url, headers=None):
         if user is not None and url.endswith(f"/users/{user['login']}"):
             return make_response(200, user)
         if repo is not None and url.endswith(f"/repos/{repo['full_name']}"):
             return make_response(200, repo)
+        if gist is not None and url.endswith(f"/gists/{gist['id']}"):
+            return make_response(200, gist)
         raise AssertionError(f"unexpected URL fetched: {url}")
 
     monkeypatch.setattr(fg.gl.nondet.web, "get", _get)
@@ -83,11 +96,10 @@ def install_eval_llm(monkeypatch, dims, eligible_hint=True, summary="Solid work.
 
 
 def register_and_verify(platform, monkeypatch, username, wallet, github_id=42):
+    proof_id = "a" * 39 + str(github_id % 10)
+    install_web_get(monkeypatch, user=user_payload(username, id=github_id), gist=gist_payload(proof_id, username, wallet))
     with as_sender(wallet):
-        platform.register_developer(username, username.title())
-    install_web_get(monkeypatch, user=user_payload(username, id=github_id))
-    with as_sender(wallet):
-        platform.verify_developer(username)
+        platform.register_developer(username, username.title(), proof_id)
 
 
 def open_epoch(platform, opener, label):
@@ -157,7 +169,7 @@ def test_full_deposit_to_claim_lifecycle(platform, owner, monkeypatch):
 
     with as_sender(owner):
         platform.mark_grants_relayed(eid, "base-tx-relay-1")
-        claim_result = platform.mark_grant_claimed(gid, "base-tx-claim-1")
+        claim_result = platform.mark_grant_claimed(gid, "base-tx-claim-1", "base-tx-claim-1:0")
 
     assert claim_result["amount_usdc"] == "1000000"
     assert int(platform.reserved_usdc) == 0
@@ -167,7 +179,7 @@ def test_full_deposit_to_claim_lifecycle(platform, owner, monkeypatch):
     assert contribution["status"] == "funded"
 
     with as_sender(owner):
-        already = platform.mark_grant_claimed(gid, "base-tx-claim-2")
+        already = platform.mark_grant_claimed(gid, "base-tx-claim-2", "base-tx-claim-2:0")
     assert already["already_processed"] is True
 
 
@@ -206,7 +218,7 @@ def test_closed_epoch_grant_stays_claimable_without_further_deposits(
 
     with as_sender(owner):
         platform.mark_grants_relayed(eid, "base-tx-relay-b")
-        result = platform.mark_grant_claimed(gid, "base-tx-claim-b")
+        result = platform.mark_grant_claimed(gid, "base-tx-claim-b", "base-tx-claim-b:0")
     assert result["already_processed"] is False
 
 
@@ -245,7 +257,7 @@ def test_two_epochs_dont_let_second_drain_first_grants_claimability(
     # fully payable.
     with as_sender(owner):
         platform.mark_grants_relayed(eid_a, "base-tx-relay-c")
-        result = platform.mark_grant_claimed(gid_a, "base-tx-claim-c")
+        result = platform.mark_grant_claimed(gid_a, "base-tx-claim-c", "base-tx-claim-c:0")
     assert result["already_processed"] is False
 
 
@@ -355,3 +367,53 @@ def test_open_epoch_is_permissionless_and_close_requires_opener_or_curator(
     with as_sender(DEV_WALLET):
         result = platform.close_epoch(eid)
     assert result["epoch"] == eid
+
+
+def test_registration_rejects_impersonation_and_does_not_squat_username(platform, monkeypatch):
+    proof_id = "b" * 40
+    install_web_get(
+        monkeypatch,
+        user=user_payload("alice"),
+        gist=gist_payload(proof_id, "alice", DEV_WALLET),
+    )
+    with as_sender(OTHER_DEV_WALLET), pytest.raises(fg.UserError, match="not bound"):
+        platform.register_developer("alice", "Fake Alice", proof_id)
+
+    # The failed impersonation never reserves the username; its real owner can register.
+    with as_sender(DEV_WALLET):
+        platform.register_developer("alice", "Alice", proof_id)
+    assert platform.get_developer("alice")["wallet"] == DEV_WALLET.lower()
+
+
+@pytest.mark.parametrize(
+    "fork,owner_login,expected_max",
+    [(True, "alice", 30), (False, "someone-else", 39), (True, "someone-else", 30)],
+)
+def test_score_caps_keep_dimensions_mathematically_consistent(
+    platform, monkeypatch, fork, owner_login, expected_max
+):
+    eid = open_epoch(platform, FUNDER_WALLET, "caps")
+    register_and_verify(platform, monkeypatch, "alice", DEV_WALLET)
+    with as_sender(DEV_WALLET):
+        cid = platform.submit_contribution("alice/capped", "library", "A sufficiently detailed description.", eid)
+    install_web_get(monkeypatch, repo=repo_payload("alice/capped", owner_login, fork=fork))
+    install_eval_llm(monkeypatch, {key: 20 for key in (
+        "downstream_usage", "technical_importance", "originality", "ecosystem_influence", "community_adoption"
+    )})
+    with as_sender(DEV_WALLET):
+        result = platform.evaluate_contribution(cid)
+    assert result["total"] == sum(result["dimensions"].values())
+    assert result["total"] <= expected_max
+    assert result["eligible"] is False
+
+
+def test_late_deposit_is_rejected_idempotently_for_exact_refund(platform, owner):
+    eid = open_epoch(platform, FUNDER_WALLET, "closed before relay")
+    with as_sender(FUNDER_WALLET):
+        platform.close_epoch(eid)
+    with as_sender(owner):
+        first = platform.record_deposit(eid, FUNDER_WALLET, 123_000, "deposit-late-1")
+        retry = platform.record_deposit(eid, FUNDER_WALLET, 123_000, "deposit-late-1")
+    assert first == {"epoch": eid, "accepted": False, "already_processed": False}
+    assert retry == {"epoch": eid, "accepted": False, "already_processed": True}
+    assert int(platform.get_epoch(eid)["pool_usdc"]) == 0
