@@ -3,7 +3,7 @@ import { studionet, localnet, testnetAsimov } from "genlayer-js/chains";
 import { TransactionStatus } from "genlayer-js/types";
 import { config } from "../config.js";
 import { logger } from "./logger.js";
-import { genlayerReceiptReturnValue, genlayerReceiptStatus } from "./genlayerReceipt.js";
+import { assertGenlayerReceiptSucceeded, genlayerReceiptReturnValue, genlayerReceiptStatus } from "./genlayerReceipt.js";
 import { cacheGet, cacheSet, cacheDel } from "../redis.js";
 
 /**
@@ -135,13 +135,7 @@ export async function contractWrite(
   // snake_case. StudioNet's current finalized receipt uses status_name and
   // keeps the numeric status (7) alongside it.
   const status = genlayerReceiptStatus(r);
-  const normalized = status.toUpperCase();
-  if (normalized !== "FINALIZED") {
-    throw new Error(`GenLayer write ${functionName} did not execute successfully (${status})`);
-  }
-  if (r?.consensus_data && typeof r.consensus_data === "object" && "error" in (r.consensus_data as object)) {
-    throw new Error(String((r.consensus_data as Record<string, unknown>).error));
-  }
+  assertGenlayerReceiptSucceeded(r);
   return {
     txHash: String(txHash),
     status,

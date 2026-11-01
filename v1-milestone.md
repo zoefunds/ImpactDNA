@@ -123,8 +123,8 @@ relaunch — this is a fresh start, not a migration.
 
 | Chain | Contract | Address |
 |---|---|---|
-| GenLayer StudioNet (61999) | ImpactDNA | `0x18de100d155851cb179a6dF17f301C158aDed0AC` |
-| Base Sepolia (84532) | ImpactDnaEscrow | `0xB5777c54047DF43024650197B560A227e35f25B8` |
+| GenLayer StudioNet (61999) | ImpactDNA | `0xC7606d65963A7e45a2A5E08B102C73efBB307466` |
+| Base Sepolia (84532) | ImpactDnaEscrow | `0x728A280E9E2DD05320B8AbA89Cd7c4E79046Cc07` |
 | Base Sepolia (84532) | USDC | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
 
 ## Verification performed

@@ -2,7 +2,7 @@
 
 ## 1. GenLayer Intelligent Contract
 
-Deployed to StudioNet at `0x18de100d155851cb179a6dF17f301C158aDed0AC`.
+Deployed to StudioNet at `0xC7606d65963A7e45a2A5E08B102C73efBB307466`.
 
 To redeploy (e.g. after changes):
 1. Open https://studio.genlayer.com, create/select an account.
@@ -21,7 +21,7 @@ genlayer write <ADDR> open_epoch --args "Genesis Round"
 
 ## 2. Base Sepolia escrow (`ImpactDnaEscrow.sol`)
 
-Deployed at `0xB5777c54047DF43024650197B560A227e35f25B8` (USDC `0x036CbD53842c5426634e7929541eC2318f3dCF7e`, relayer `0x7401c129EDfc26E68FE19309fE461eb3Db1058Eb`).
+Deployed at `0x728A280E9E2DD05320B8AbA89Cd7c4E79046Cc07` (USDC `0x036CbD53842c5426634e7929541eC2318f3dCF7e`, relayer/owner `0x0f4CAd4b62DfcEce23a6e88565BFf83C703B28e2`).
 
 To redeploy:
 ```bash
@@ -49,12 +49,12 @@ fly secrets set \
   CORS_ORIGINS="https://impactdna.vercel.app" \
   GENLAYER_RPC_URL="https://studio.genlayer.com/api" \
   GENLAYER_NETWORK="studionet" \
-  GENLAYER_CONTRACT_ADDRESS="0x18de100d155851cb179a6dF17f301C158aDed0AC" \
+  GENLAYER_CONTRACT_ADDRESS="0xC7606d65963A7e45a2A5E08B102C73efBB307466" \
   GENLAYER_OPERATOR_PRIVATE_KEY="0x..." \
   BASE_SEPOLIA_RPC_URL="https://sepolia.base.org" \
   BASE_SEPOLIA_RELAYER_PRIVATE_KEY="0x..." \
   USDC_CONTRACT_ADDRESS="0x036CbD53842c5426634e7929541eC2318f3dCF7e" \
-  IMPACT_DNA_ESCROW_ADDRESS="0xB5777c54047DF43024650197B560A227e35f25B8" \
+  IMPACT_DNA_ESCROW_ADDRESS="0x728A280E9E2DD05320B8AbA89Cd7c4E79046Cc07" \
   BREVO_API_KEY="xkeysib-…" \
   BREVO_SENDER_EMAIL="preciousmofeoluwa@gmail.com" \
   GITHUB_CLIENT_ID="…" \
@@ -102,9 +102,9 @@ confirm it's picked up the config; its absence means the relay loop is active.
 cd frontend
 vercel link
 vercel env add NEXT_PUBLIC_API_URL production                       # https://impactdna-milestone-api.fly.dev
-vercel env add NEXT_PUBLIC_GENLAYER_CONTRACT_ADDRESS production     # 0x18de100d155851cb179a6dF17f301C158aDed0AC
+vercel env add NEXT_PUBLIC_GENLAYER_CONTRACT_ADDRESS production     # 0xC7606d65963A7e45a2A5E08B102C73efBB307466
 vercel env add NEXT_PUBLIC_USDC_CONTRACT_ADDRESS production         # 0x036CbD53842c5426634e7929541eC2318f3dCF7e
-vercel env add NEXT_PUBLIC_IMPACT_DNA_ESCROW_ADDRESS production     # 0xB5777c54047DF43024650197B560A227e35f25B8
+vercel env add NEXT_PUBLIC_IMPACT_DNA_ESCROW_ADDRESS production     # 0x728A280E9E2DD05320B8AbA89Cd7c4E79046Cc07
 vercel --prod
 ```
 

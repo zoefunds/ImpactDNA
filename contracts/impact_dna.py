@@ -588,7 +588,7 @@ class ImpactDNA(gl.Contract):
     def transfer_ownership(self, new_owner: str) -> None:
         """Transfer contract ownership to another address."""
         self._require_owner()
-        addr = Address(new_owner)
+        addr = new_owner if isinstance(new_owner, Address) else Address(new_owner)
         self.owner = addr
         self.curators[addr.as_hex] = True
         self._audit("transfer_ownership", self._sender_hex(), {"new_owner": addr.as_hex})
@@ -597,7 +597,7 @@ class ImpactDNA(gl.Contract):
     def add_curator(self, curator: str) -> None:
         """Grant curator role (may open/close epochs, resolve appeals)."""
         self._require_owner()
-        addr = Address(curator)
+        addr = curator if isinstance(curator, Address) else Address(curator)
         if not self.curators.get(addr.as_hex, False):
             self.curators[addr.as_hex] = True
             self.curator_count = u256(int(self.curator_count) + 1)
@@ -607,7 +607,7 @@ class ImpactDNA(gl.Contract):
     def remove_curator(self, curator: str) -> None:
         """Revoke curator role. The owner always retains curator power."""
         self._require_owner()
-        addr = Address(curator)
+        addr = curator if isinstance(curator, Address) else Address(curator)
         if addr == self.owner:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Cannot remove the owner as curator")
         if self.curators.get(addr.as_hex, False):
@@ -636,7 +636,7 @@ class ImpactDNA(gl.Contract):
         """Point at the backend service authorized to bridge Base Sepolia
         USDC deposits/claims into this ledger."""
         self._require_owner()
-        self.relayer = Address(relayer)
+        self.relayer = relayer if isinstance(relayer, Address) else Address(relayer)
         self._audit("set_relayer", self._sender_hex(), {"relayer": self.relayer.as_hex})
 
     @gl.public.write
@@ -1254,6 +1254,8 @@ Return ONLY JSON:
             "allocated_usdc": "0",
             "contribution_ids": [],
             "grant_ids": [],
+            "relayed": False,
+            "relay_tx_hash": "",
             "opened_seq": int(self.audit_count),
             "closed_seq": 0,
         }
@@ -1382,11 +1384,16 @@ Return ONLY JSON:
             return {"epoch": epoch_id, "already_processed": True}
         self.processed_base_tx[base_tx_hash] = True
         epoch = self._load("epoch", epoch_id)
+        if epoch["status"] != EPOCH_CLOSED:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Epoch is not closed")
         for gid in epoch["grant_ids"]:
             grant = self._load("grant", gid)
             grant["relayed"] = True
             grant["relay_tx_hash"] = base_tx_hash
             self._save("grant", gid, grant)
+        epoch["relayed"] = True
+        epoch["relay_tx_hash"] = base_tx_hash
+        self._save("epoch", epoch_id, epoch)
         self._bump_stat("grant_batches_relayed")
         self._audit(
             "mark_grants_relayed",

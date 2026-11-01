@@ -26,6 +26,28 @@ export function genlayerReceiptReturnValue(receipt: Record<string, unknown>): un
   return null;
 }
 
+/** FINALIZED only describes consensus finality. A reverted GenVM call may
+ * also finalize, so require the canonical successful leader execution. */
+export function assertGenlayerReceiptSucceeded(receipt: Record<string, unknown>): void {
+  const status = genlayerReceiptStatus(receipt).toUpperCase();
+  if (status !== "FINALIZED") throw new Error(`GenLayer transaction was not finalized (${status})`);
+  const consensus = receipt.consensus_data;
+  if (!consensus || typeof consensus !== "object") throw new Error("GenLayer receipt has no consensus result");
+  const data = consensus as Record<string, unknown>;
+  if (data.error) throw new Error(String(data.error));
+  const leaders = data.leader_receipt;
+  if (!Array.isArray(leaders) || leaders.length === 0) throw new Error("GenLayer receipt has no leader execution result");
+  const successful = leaders.some((entry) => {
+    if (!entry || typeof entry !== "object") return false;
+    const leader = entry as Record<string, unknown>;
+    const result = leader.result;
+    return String(leader.execution_result ?? "").toUpperCase() === "SUCCESS"
+      && !!result && typeof result === "object"
+      && String((result as Record<string, unknown>).status ?? "").toLowerCase() === "return";
+  });
+  if (!successful) throw new Error("GenLayer transaction finalized without FINISHED_WITH_RETURN");
+}
+
 export function genlayerBooleanResult(value: unknown, key: string): boolean {
   if (value && typeof value === "object") {
     return (value as Record<string, unknown>)[key] === true;

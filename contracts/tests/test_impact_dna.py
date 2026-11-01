@@ -417,3 +417,21 @@ def test_late_deposit_is_rejected_idempotently_for_exact_refund(platform, owner)
     assert first == {"epoch": eid, "accepted": False, "already_processed": False}
     assert retry == {"epoch": eid, "accepted": False, "already_processed": True}
     assert int(platform.get_epoch(eid)["pool_usdc"]) == 0
+
+
+def test_funded_epoch_without_qualifying_contributions_has_relayable_empty_settlement(platform, owner):
+    eid = open_epoch(platform, FUNDER_WALLET, "no eligible recipients")
+    with as_sender(owner):
+        accepted = platform.record_deposit(eid, FUNDER_WALLET, 1_000_000, "deposit-empty-epoch")
+    assert accepted["accepted"] is True
+    with as_sender(FUNDER_WALLET):
+        result = platform.close_epoch(eid)
+    assert result["allocated_usdc"] == "0"
+    assert result["unallocated_usdc"] == "1000000"
+    assert result["grants"] == []
+    with as_sender(owner):
+        marked = platform.mark_grants_relayed(eid, "base-empty-settlement-tx")
+    epoch = platform.get_epoch(eid)
+    assert marked["grants"] == 0
+    assert epoch["relayed"] is True
+    assert epoch["relay_tx_hash"] == "base-empty-settlement-tx"

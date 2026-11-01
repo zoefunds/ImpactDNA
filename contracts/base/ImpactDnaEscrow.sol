@@ -60,6 +60,7 @@ contract ImpactDnaEscrow {
     event DepositReconciled(bytes32 indexed depositId, bool accepted);
     event DepositRefunded(bytes32 indexed depositId, address indexed depositor, uint256 amount);
     event GrantsSet(bytes32 indexed epochId, uint256 recipientCount, uint256 totalAllocated);
+    event EmptyEpochSettled(bytes32 indexed epochId, uint256 unallocatedAmount);
     event Claimed(bytes32 indexed epochId, address indexed recipient, uint256 amount);
     event RelayerUpdated(address indexed newRelayer);
     event OwnerUpdated(address indexed newOwner);
@@ -176,6 +177,17 @@ contract ImpactDnaEscrow {
         }
 
         emit GrantsSet(epochId, recipients.length, total);
+    }
+
+    /// @notice Finalize a closed epoch that produced no eligible grants.
+    /// This is deliberately relayer-only: until GenLayer has closed the
+    /// epoch, every accepted USDC remains locked as active collateral.
+    function settleEmptyEpoch(bytes32 epochId) external onlyRelayer {
+        Pool storage pool = pools[epochId];
+        require(!pool.grantsSet, "ImpactDnaEscrow: grants already set");
+        require(pool.accepted > 0, "ImpactDnaEscrow: empty pool");
+        pool.grantsSet = true;
+        emit EmptyEpochSettled(epochId, pool.accepted);
     }
 
     // ------------------------------------------------------------------

@@ -12,10 +12,10 @@ ImpactDNA flips the traditional grants model: instead of funding proposals befor
 |---|---|
 | **Web app** | [impactdna.vercel.app](https://impactdna.vercel.app) |
 | **REST API** (24/7, health-checked) | [impactdna-milestone-api.fly.dev](https://impactdna-milestone-api.fly.dev) |
-| **GenLayer Intelligent Contract** | [`0x18de100d155851cb179a6dF17f301C158aDed0AC`](https://studio.genlayer.com) — GenLayer StudioNet (gasless) |
-| **Base Sepolia escrow** | [`0xB5777c54047DF43024650197B560A227e35f25B8`](https://sepolia.basescan.org/address/0xB5777c54047DF43024650197B560A227e35f25B8) — `ImpactDnaEscrow.sol` |
+| **GenLayer Intelligent Contract** | [`0xC7606d65963A7e45a2A5E08B102C73efBB307466`](https://studio.genlayer.com) — GenLayer StudioNet (gasless) |
+| **Base Sepolia escrow** | [`0x728A280E9E2DD05320B8AbA89Cd7c4E79046Cc07`](https://sepolia.basescan.org/address/0x728A280E9E2DD05320B8AbA89Cd7c4E79046Cc07) — `ImpactDnaEscrow.sol` |
 | **USDC (Base Sepolia)** | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
-| **Owner / relayer / first curator** | `0x7401c129EDfc26E68FE19309fE461eb3Db1058Eb` |
+| **Owner / relayer / first curator** | `0x0f4CAd4b62DfcEce23a6e88565BFf83C703B28e2` (rotated 2026-11-01) |
 
 The verified Base Sepolia deposit-to-claim transaction chain is documented in [`docs/MILESTONE-REMEDIATION.md`](docs/MILESTONE-REMEDIATION.md#live-base-sepolia-deposit-to-claim-evidence).
 
@@ -100,7 +100,7 @@ An off-chain AI could score repositories, but there would be no way to verify th
 GenLayer's own EVM-compatibility layer can move its native GEN token, but not an ERC20 on another chain — so real USDC custody lives in `ImpactDnaEscrow.sol` on Base Sepolia, and a single backend relayer bridges the two chains (the same pattern used by this project's sibling `meme-olympics` and `Event-Weaver` builds):
 
 - **Deposits**: anyone calls `ImpactDnaEscrow.deposit(epochId, depositId, amount)` (standard ERC20 approve + deposit). The relayer resolves the epoch and calls `record_deposit(epoch_id, depositor, amount, deposit_id)`, then reconciles the same exact Base deposit as accepted or refundable. This closes the cross-chain epoch-close race without stranding funds.
-- **Settlement relay**: once a curator (or the epoch's own opener) closes an epoch, the relayer reads `get_grants_pending_relay(epoch_id)` and pushes the recipient list to `ImpactDnaEscrow.setGrants(...)` — the contract rejects a second call for the same epoch, so a retry after a partial failure is always safe.
+- **Settlement relay**: once a curator (or the epoch's own opener) closes an epoch, the relayer pushes non-zero grants through `setGrants(...)`, or calls `settleEmptyEpoch(...)` when a funded round has no eligible recipients. The original Base transaction hash is persisted before the GenLayer acknowledgement, so partial failures reconcile without resubmitting an already-complete settlement.
 - **Claims**: a grant recipient calls `ImpactDnaEscrow.claim(epochId)` directly with their own wallet — the escrow holds the real USDC and pays out itself; durable relayer event rows mirror every `Claimed` log against complete grant records so failures and multi-claim transactions are retryable.
 - **No custodial keys anywhere in this path.** Deposits and claims are signed by the user's own connected wallet; only the relayer's own bridging calls (`record_deposit`, `mark_grants_relayed`, `mark_grant_claimed`) use a dedicated backend key, which must be set as the contract's `relayer` (`set_relayer`) on GenLayer and the escrow's `relayer` on Base Sepolia.
 
@@ -199,20 +199,20 @@ The same operations are available directly against the contract for scripted or 
 
 ```bash
 # Open a permissionless epoch (any wallet)
-genlayer write 0x18de100d155851cb179a6dF17f301C158aDed0AC open_epoch --args "Season 1"
+genlayer write 0xC7606d65963A7e45a2A5E08B102C73efBB307466 open_epoch --args "Season 1"
 
 # Anyone deposits USDC into it on Base Sepolia (ImpactDnaEscrow.deposit),
 # which the relayer picks up and credits to the epoch automatically.
 
 # Close epoch — deterministic quadratic settlement (opener or curator)
-genlayer write 0x18de100d155851cb179a6dF17f301C158aDed0AC close_epoch --args e-1
+genlayer write 0xC7606d65963A7e45a2A5E08B102C73efBB307466 close_epoch --args e-1
 
 # Resolve any open appeals / run a manipulation screen (curator)
-genlayer write 0x18de100d155851cb179a6dF17f301C158aDed0AC resolve_appeal --args a-1
-genlayer write 0x18de100d155851cb179a6dF17f301C158aDed0AC detect_manipulation --args c-1
+genlayer write 0xC7606d65963A7e45a2A5E08B102C73efBB307466 resolve_appeal --args a-1
+genlayer write 0xC7606d65963A7e45a2A5E08B102C73efBB307466 detect_manipulation --args c-1
 
 # Adjust the eligibility gate (owner only)
-genlayer write 0x18de100d155851cb179a6dF17f301C158aDed0AC set_min_eligible_score --args 40
+genlayer write 0xC7606d65963A7e45a2A5E08B102C73efBB307466 set_min_eligible_score --args 40
 ```
 
 ## Current stage & path forward
@@ -223,7 +223,6 @@ Concrete next steps:
 
 - **Onboard real external developers and funders.** Both the developer-verification pipeline and the now-permissionless funding side are ready for anyone to use directly — the next milestone is getting real, unaffiliated participants through both paths.
 - **Recruit additional curators.** One wallet currently holds owner + first-curator + relayer power. The contract and admin panel already support adding independent curators (`add_curator`); spreading that role out (and moving the relayer to its own dedicated key) is a trust improvement, not just a feature.
-- **Rotate the relayer/operator key.** The current key was shared in a development chat session and should be treated as already compromised for anything beyond testnet — generate and wire in a fresh one before any real value passes through the escrow.
 - **Mainnet / Base deployment.** Both StudioNet and Base Sepolia are testnets; moving to live networks is the natural next step once a funding round has run with real external participants.
 - **Recurring, concurrent funding rounds.** The quadratic-settlement math is unit-verified and now supports multiple simultaneously-open epochs by construction — a real round with several concurrently open, differently-funded epochs is the next proof point.
 

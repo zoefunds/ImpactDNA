@@ -1,10 +1,24 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  assertGenlayerReceiptSucceeded,
   genlayerBooleanResult,
   genlayerReceiptReturnValue,
   genlayerReceiptStatus,
 } from "../lib/genlayerReceipt.js";
+
+const successfulReceipt = {
+  status_name: "FINALIZED",
+  consensus_data: { leader_receipt: [{ execution_result: "SUCCESS", result: { status: "return" } }] },
+};
+
+test("requires finalized execution to finish with return", () => {
+  assert.doesNotThrow(() => assertGenlayerReceiptSucceeded(successfulReceipt));
+  assert.throws(() => assertGenlayerReceiptSucceeded({
+    status_name: "FINALIZED",
+    consensus_data: { leader_receipt: [{ execution_result: "ERROR", result: { status: "error" } }] },
+  }), /FINISHED_WITH_RETURN/);
+});
 
 test("accepts current StudioNet snake_case finalized status", () => {
   assert.equal(genlayerReceiptStatus({ status: 7, status_name: "FINALIZED" }), "FINALIZED");

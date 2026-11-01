@@ -61,7 +61,8 @@ epoch's own `pool_usdc`. `close_epoch(epoch_id)` — callable by that epoch's
 opener or any curator — then splits `pool_usdc` by quadratic weight
 (`score^2`) exactly as before; the relayer reads
 `get_grants_pending_relay(epoch_id)` afterward and pushes the recipient list
-to the escrow's `setGrants`, then mirrors that back via
+to the escrow's `setGrants`; a zero-recipient funded epoch instead uses the
+relayer-only `settleEmptyEpoch`. The relayer then mirrors either terminal state via
 `mark_grants_relayed`. A recipient's own `ImpactDnaEscrow.claim(epochId)`
 call is mirrored back via `mark_grant_claimed` once observed.
 
@@ -83,7 +84,9 @@ leader and validator; `[TRANSIENT]` network/5xx agree if both transient;
 No external dependencies (no OpenZeppelin) — a `Pool` struct per epoch id
 (`deposited`, `accepted`, `allocated`, `grantsSet`), exact deposit records
 reconciled as accepted or refundable, and `claimable`/immutable `granted`
-mappings credited only by the relayer's one-shot `setGrants` call. The `claim`/`claimMany`
+mappings credited only by the relayer's one-shot `setGrants` call. Empty funded
+rounds have an explicit one-shot `settleEmptyEpoch` state, which unlocks only
+their unallocated balance. The `claim`/`claimMany`
 self-serve pull pattern with a reentrancy guard. Owner/relayer are
 independently settable (`transferOwnership`/`setRelayer`); an owner-only
 `withdrawUnallocated` is disabled while an epoch is active and can recover
@@ -108,7 +111,9 @@ Node 20, TypeScript strict, Express.
 - **Relay loop** (`src/jobs/relay.ts`): scans Base Sepolia for confirmed
   `Deposited`/`Claimed` events into durable rows, applies them to GenLayer,
   reconciles accepted/refundable deposits on Base, and pushes closed epochs' settled
-  grants to the escrow (`setGrants` → `mark_grants_relayed`). Guarded by a
+  grants to the escrow (`setGrants` or `settleEmptyEpoch` → `mark_grants_relayed`).
+  Base settlement hashes are persisted before the GenLayer acknowledgement;
+  the last-resort event recovery query is capped at 200 blocks. Guarded by a
   Redis-backed distributed lock (`withLock`) so multiple Fly machines never
   double-relay; degrades to an in-process lock if Redis is unavailable.
   Signs with `BASE_SEPOLIA_RELAYER_PRIVATE_KEY` on both chains (a plain
@@ -124,7 +129,8 @@ Node 20, TypeScript strict, Express.
 `users` (wallet_address, display_name, email — notification-only, nullable —
 github_username, role), `refresh_tokens`, `auth_nonces` (SIWE challenges),
 `contribution_mirror` (fast reads; chain is canonical), `pending_deposits`,
-`pending_claims`, and `relay_sync_state` (durable relay events/retries/cursors), `notification_log`,
+`pending_claims`, `relay_sync_state`, and `epoch_settlements` (durable relay
+events/retries/cursors and allocation hashes), `notification_log`,
 `audit_events`, `schema_migrations`. Forward-only SQL migrations applied
 transactionally at boot.
 

@@ -7,10 +7,10 @@ Last verified: 2026-11-01. This file records current operational facts; historic
 - Frontend: `https://impactdna.vercel.app`
 - Backend: `https://impactdna-milestone-api.fly.dev` (`impactdna-milestone-api`, Fly region `iad`)
 - Database: `impactdna-milestone-db`; migrations `001` through `008` applied
-- GenLayer StudioNet contract: `0x18de100d155851cb179a6dF17f301C158aDed0AC`
-- Base Sepolia escrow: `0xB5777c54047DF43024650197B560A227e35f25B8`
+- GenLayer StudioNet contract: `0xC7606d65963A7e45a2A5E08B102C73efBB307466`
+- Base Sepolia escrow: `0x728A280E9E2DD05320B8AbA89Cd7c4E79046Cc07`
 - Base Sepolia USDC: `0x036CbD53842c5426634e7929541eC2318f3dCF7e`
-- Owner, relayer, and first curator: `0x7401c129EDfc26E68FE19309fE461eb3Db1058Eb`
+- Owner, relayer, and first curator: `0x0f4CAd4b62DfcEce23a6e88565BFf83C703B28e2` (rotated 2026-11-01)
 - Eligibility threshold: `40`
 
 Both chains are testnets. The Base escrow is the sole custodian of USDC; GenLayer is the authoritative evaluation and grant ledger.

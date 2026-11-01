@@ -30,7 +30,7 @@ These are protocol interface changes and require coordinated redeployment:
 
 1. Deploy the updated Base escrow and set its relayer.
 2. Deploy the updated Intelligent Contract and set the same relayer identity.
-3. Apply backend migrations `007` and `008`, then deploy the backend with both new addresses.
+3. Apply backend migrations `007`, `008`, and `009`, then deploy the backend with both new addresses.
 4. Deploy the frontend with the new escrow and Intelligent Contract addresses.
 5. Reconnect GitHub accounts created before this milestone so OAuth can create their wallet-proof gist.
 
@@ -38,8 +38,8 @@ These are protocol interface changes and require coordinated redeployment:
 
 Completed on 2026-11-01 against the milestone deployments:
 
-- GenLayer StudioNet contract: `0x18de100d155851cb179a6dF17f301C158aDed0AC`
-- Base Sepolia escrow: `0xB5777c54047DF43024650197B560A227e35f25B8`
+- Historical GenLayer StudioNet contract: `0x18de100d155851cb179a6dF17f301C158aDed0AC`
+- Historical Base Sepolia escrow: `0xB5777c54047DF43024650197B560A227e35f25B8`
 - Epoch / contribution / grant: `e-2` / `c-2` / `g-1`
 - Recipient: `0x7401c129EDfc26E68FE19309fE461eb3Db1058Eb`
 - Amount: `1,000,000` USDC base units (1 test USDC)
@@ -57,3 +57,27 @@ Transaction chain:
 Before/after recipient USDC balances were `102,139,500` and `103,139,500` base units. The final Base claimable balance is zero. GenLayer `get_grant("g-1")` reports `relayed=true`, `claimed=true`, and the Base relay/claim hashes above. The production eligibility threshold was restored to `40` before funding and remained `40` at final verification.
 
 The same run also exercised late-deposit recovery while correcting a StudioNet SDK receipt-shape mismatch: refundable deposit `0x2e6732122f038115d1a83934340b46d9f0acb2e732a612160209cd7f74cd31a6` was returned in Base transaction `0x74dc65a7ac28033284661d1d3f14d941c0b127ed95e1bbc1dcb4e739bc9dacc9`. Receipt parsing now has dedicated regression coverage for StudioNet's snake-case status and comma-less readable return payload.
+
+## Final reviewer follow-up (2026-11-01)
+
+The final four edge cases are addressed by:
+
+- `settleEmptyEpoch`, a relayer-only Base terminal state for a funded epoch
+  with zero eligible recipients. Collateral stays locked until settlement;
+  afterward only the unallocated balance can be recovered.
+- explicit finality and execution checks in backend and browser clients:
+  `FINALIZED`, `execution_result=SUCCESS`, and `result.status=return` are all
+  required. A finalized revert is rejected.
+- migration `009`, which durably stores each original Base settlement hash,
+  with a bounded 200-block fallback scan instead of a genesis log scan.
+- rotation of the previously exposed operator identity and transfer of both
+  Base and GenLayer owner/relayer roles to
+  `0x0f4CAd4b62DfcEce23a6e88565BFf83C703B28e2`.
+
+Current coordinated contract deployments:
+
+- GenLayer StudioNet: `0xC7606d65963A7e45a2A5E08B102C73efBB307466`
+- Base Sepolia escrow: `0x728A280E9E2DD05320B8AbA89Cd7c4E79046Cc07`
+
+Regression evidence: 13 Intelligent Contract tests, 5 Foundry escrow tests,
+7 backend tests, and a successful optimized frontend build.

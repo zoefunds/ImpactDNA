@@ -74,7 +74,17 @@ export interface OnchainGrant {
  * partial failure (e.g. the GenLayer mark_grants_relayed call failing
  * after this succeeded) is safe to just call again.
  */
-export async function relayGrantsToEscrow(epochId: string, grants: OnchainGrant[]): Promise<string> {
+async function findRecentSettlementTx(contract: ethers.Contract, key: string, empty: boolean): Promise<string> {
+  const head = await getProvider().getBlockNumber();
+  const from = Math.max(0, head - 199);
+  const filter = empty ? contract.filters.EmptyEpochSettled(key) : contract.filters.GrantsSet(key);
+  const events = await contract.queryFilter(filter, from, head);
+  const event = events.at(-1);
+  if (!event) throw new Error("Base reports settlement complete but its transaction is not in the bounded 200-block recovery window");
+  return event.transactionHash;
+}
+
+export async function relayGrantsToEscrow(epochId: string, grants: OnchainGrant[], knownTxHash?: string): Promise<string> {
   const contract = getRelayerContract();
   const nonZero = grants.filter((g) => BigInt(g.amount_usdc || "0") > BigInt(0));
   if (nonZero.length === 0) {
@@ -101,12 +111,9 @@ export async function relayGrantsToEscrow(epochId: string, grants: OnchainGrant[
         throw new Error(`Base assigned-grant mismatch for ${epochId}/${wallet}`);
       }
     }
-    const filter = contract.filters.GrantsSet(key);
-    const events = await contract.queryFilter(filter, 0, "latest");
-    const event = events.at(-1);
-    if (!event) throw new Error(`Base reports grants set for ${epochId} but no GrantsSet event was found`);
-    logger.info({ epochId, txHash: event.transactionHash }, "reconciled existing Base grant allocation");
-    return event.transactionHash;
+    const txHash = knownTxHash || await findRecentSettlementTx(contract, key, false);
+    logger.info({ epochId, txHash }, "reconciled existing Base grant allocation");
+    return txHash;
   }
 
   const tx = await contract.setGrants(key, addresses, amounts);
@@ -115,6 +122,18 @@ export async function relayGrantsToEscrow(epochId: string, grants: OnchainGrant[
   if (!receipt || receipt.status !== 1) {
     throw new Error(`setGrants transaction failed for epoch ${epochId}`);
   }
+  return tx.hash as string;
+}
+
+export async function settleEmptyEscrowEpoch(epochId: string, knownTxHash?: string): Promise<string> {
+  const contract = getRelayerContract();
+  const key = epochIdToBytes32(epochId);
+  const existing = await getEscrowPool(epochId);
+  if (existing.grantsSet) return knownTxHash || await findRecentSettlementTx(contract, key, true);
+  if (BigInt(existing.deposited) === 0n) throw new Error(`Cannot settle unfunded empty epoch ${epochId}`);
+  const tx = await contract.settleEmptyEpoch(key);
+  const receipt = await tx.wait();
+  if (!receipt || receipt.status !== 1) throw new Error(`empty epoch settlement failed for ${epochId}`);
   return tx.hash as string;
 }
 

@@ -14,6 +14,7 @@ import { studionet } from "genlayer-js/chains";
 import { getAccount } from "@wagmi/core";
 import { wagmiConfig } from "./wallet";
 import { ensureChain, GENLAYER_STUDIONET } from "./chainSwitch";
+import { assertGenlayerReceiptSucceeded } from "./genlayerReceipt";
 
 const GENLAYER_CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_GENLAYER_CONTRACT_ADDRESS ?? "";
 
@@ -61,13 +62,7 @@ export async function genlayerWrite(
     interval: 3000,
   } as never);
   const r = receipt as unknown as Record<string, unknown>;
-  const status = String(r?.statusName ?? r?.status ?? "").toUpperCase();
-  if (status !== "FINALIZED") {
-    throw new Error(`GenLayer transaction did not execute successfully (${status || "unknown status"})`);
-  }
-  if (r?.consensus_data && typeof r.consensus_data === "object" && "error" in (r.consensus_data as object)) {
-    throw new Error(String((r.consensus_data as Record<string, unknown>).error));
-  }
+  assertGenlayerReceiptSucceeded(r);
   return { txHash: String(txHash), result: r?.consensus_data ?? null };
 }
 

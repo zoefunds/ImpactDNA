@@ -14,7 +14,7 @@
 
 Both issues were fixed in `contracts/impact_dna.py`, covered by new tests in
 `contracts/tests/`, verified live against the deployed contract
-(`0x18de100d155851cb179a6dF17f301C158aDed0AC`).
+(`0xC7606d65963A7e45a2A5E08B102C73efBB307466`).
 
 ---
 
@@ -112,17 +112,17 @@ The current contract suite uses the lightweight GenLayer stand-in in
 `contracts/tests/fake_genlayer.py` and covers the reconciled USDC lifecycle,
 wallet-bound GitHub registration, impersonation/squatting rejection,
 fork/non-owner caps, threshold boundaries, relay idempotency, and claim
-acknowledgement. All 12 tests pass:
+acknowledgement, and zero-allocation settlement. All 13 tests pass:
 
 ```
 python3 -m pytest contracts/tests/test_impact_dna.py -q
-............                                                             [100%]
-12 passed
+.............                                                            [100%]
+13 passed
 ```
 
-The Base escrow adds 4 Foundry regression tests for accepted collateral,
+The Base escrow adds 5 Foundry regression tests for accepted collateral,
 late refunds, post-settlement deposit rejection, and active-collateral
-withdrawal protection. The backend adds 6 tests for complete grant matching,
+withdrawal protection and zero-recipient settlement. The backend adds 7 tests for complete grant matching,
 multi-grant claim events, retries, and StudioNet receipt parsing.
 
 ---
@@ -130,7 +130,7 @@ multi-grant claim events, retries, and StudioNet receipt parsing.
 ## Verification against the live contract
 
 - Fix implemented and tested locally, then the fixed contract source was
-  deployed to `0x18de100d155851cb179a6dF17f301C158aDed0AC` on GenLayer
+  deployed to `0xC7606d65963A7e45a2A5E08B102C73efBB307466` on GenLayer
   StudioNet.
 - Backend (`impactdna-milestone-api.fly.dev`) and frontend (`impactdna.vercel.app`)
   both point at this address (`GENLAYER_CONTRACT_ADDRESS`).

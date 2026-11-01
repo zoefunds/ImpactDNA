@@ -91,4 +91,19 @@ contract ImpactDnaEscrowTest {
         vm.expectRevert(bytes("ImpactDnaEscrow: epoch settled"));
         vm.prank(FUNDER); escrow.deposit(EPOCH, bytes32(uint256(6)), 1);
     }
+
+    function testFundedEpochWithNoRecipientsCanSettleAndRecover() public {
+        bytes32 id = bytes32(uint256(7));
+        _deposit(id, 1_000_000);
+        vm.prank(RELAYER); escrow.reconcileDeposit(id, true);
+        vm.expectRevert(bytes("ImpactDnaEscrow: active epoch collateral locked"));
+        escrow.withdrawUnallocated(EPOCH, address(this), 1_000_000);
+        vm.prank(RELAYER); escrow.settleEmptyEpoch(EPOCH);
+        escrow.withdrawUnallocated(EPOCH, address(this), 1_000_000);
+        (uint256 deposited, uint256 accepted, uint256 allocated, bool settled) = escrow.getPoolState(EPOCH);
+        require(deposited == 0 && accepted == 0 && allocated == 0 && settled, "empty settlement mismatch");
+        require(token.balanceOf(address(this)) == 1_000_000, "recovery mismatch");
+        vm.expectRevert(bytes("ImpactDnaEscrow: grants already set"));
+        vm.prank(RELAYER); escrow.settleEmptyEpoch(EPOCH);
+    }
 }

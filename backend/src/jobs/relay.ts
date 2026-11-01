@@ -22,7 +22,7 @@ import { logger } from "../lib/logger.js";
 import { config } from "../config.js";
 import { withLock } from "../redis.js";
 import { IMPACT_DNA_ESCROW_ABI } from "../lib/escrowAbi.js";
-import { getProviderForScan, isEscrowConfigured, relayGrantsToEscrow, reconcileEscrowDeposit } from "../services/baseSepolia.js";
+import { getProviderForScan, isEscrowConfigured, relayGrantsToEscrow, reconcileEscrowDeposit, settleEmptyEscrowEpoch } from "../services/baseSepolia.js";
 import {
   isGenlayerRelayConfigured,
   listEpochs,
@@ -133,13 +133,26 @@ export async function relayClosedEpochGrants(): Promise<void> {
     if (epoch.status !== "closed") continue;
     const epochId = epoch.id as string;
     const pending = await getGrantsPendingRelay(epochId);
-    if (pending.length === 0) continue;
-
-    const txHash = await relayGrantsToEscrow(
-      epochId,
-      pending.map((g) => ({ grant: g.id, wallet: g.wallet, amount_usdc: g.amount_usdc })),
+    if (pending.length === 0 && (epoch.relayed === true || BigInt(String(epoch.allocated_usdc ?? "0")) > 0n)) continue;
+    const prior = await query<{ base_tx_hash: string }>(
+      "SELECT base_tx_hash FROM epoch_settlements WHERE epoch_id = $1 AND base_tx_hash IS NOT NULL",
+      [epochId],
+    );
+    const knownTxHash = prior.rows[0]?.base_tx_hash;
+    const txHash = pending.length > 0
+      ? await relayGrantsToEscrow(
+          epochId,
+          pending.map((g) => ({ grant: g.id, wallet: g.wallet, amount_usdc: g.amount_usdc })),
+          knownTxHash,
+        )
+      : await settleEmptyEscrowEpoch(epochId, knownTxHash);
+    await query(
+      `INSERT INTO epoch_settlements (epoch_id, base_tx_hash, settlement_kind, updated_at)
+       VALUES ($1,$2,$3,now()) ON CONFLICT (epoch_id) DO UPDATE SET base_tx_hash=$2, settlement_kind=$3, updated_at=now()`,
+      [epochId, txHash, pending.length > 0 ? "grants" : "empty"],
     );
     await markGrantsRelayedOnGenlayer(epochId, txHash);
+    await query("UPDATE epoch_settlements SET genlayer_marked_at=now(), updated_at=now() WHERE epoch_id=$1", [epochId]);
   }
 }
 
