@@ -32,7 +32,7 @@ import {
   recordDepositOnGenlayer,
   listAllGrants,
 } from "../services/genlayerRelay.js";
-import { depositResolution, grantsForClaim, resolveEpochId } from "./relayLogic.js";
+import { depositEventId, grantsForClaim, reconcileDepositRows, resolveEpochId } from "./relayLogic.js";
 
 const DEPOSITED_BLOCK_KEY = "relay:lastScannedDepositBlock";
 const CLAIMED_BLOCK_KEY = "relay:lastScannedClaimBlock";
@@ -74,6 +74,8 @@ export async function scanDeposits(): Promise<void> {
     for (const ev of events) {
       if (!("args" in ev) || !ev.args) continue;
       const baseTxHash = ev.transactionHash.toLowerCase();
+      const logIndex = Number(ev.index);
+      const eventId = depositEventId(baseTxHash, logIndex);
       const depositId = ev.args.depositId as string;
       const epochHash = ev.args.epochId as string;
       const epochId = resolveEpochId(items, epochHash, ethers.id);
@@ -81,10 +83,12 @@ export async function scanDeposits(): Promise<void> {
         logger.warn({ escrowEpochHash: epochHash, baseTxHash }, "persisting invalid-epoch deposit for exact refund reconciliation");
       }
       await query(
-        `INSERT INTO pending_deposits (base_tx_hash, deposit_id, epoch_id, epoch_hash, depositor, amount_usdc, block_number)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         ON CONFLICT (base_tx_hash) DO NOTHING`,
-        [baseTxHash, depositId, epochId, epochHash, ev.args.from as string, (ev.args.amount as bigint).toString(), ev.blockNumber],
+        `INSERT INTO pending_deposits
+           (event_id, base_tx_hash, log_index, deposit_id, epoch_id, epoch_hash, depositor, amount_usdc, block_number)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         ON CONFLICT DO NOTHING`,
+        [eventId, baseTxHash, logIndex, depositId, epochId, epochHash,
+         ev.args.from as string, (ev.args.amount as bigint).toString(), ev.blockNumber],
       );
     }
   }
@@ -96,6 +100,7 @@ export async function scanDeposits(): Promise<void> {
 
 export async function applyPendingDeposits(): Promise<void> {
   const rows = await query<{
+    event_id: string;
     base_tx_hash: string;
     deposit_id: string;
     epoch_id: string | null;
@@ -103,28 +108,33 @@ export async function applyPendingDeposits(): Promise<void> {
     amount_usdc: string;
     attempts: number;
   }>(
-    `SELECT base_tx_hash, deposit_id, epoch_id, depositor, amount_usdc, attempts FROM pending_deposits
-     WHERE status = 'pending' ORDER BY created_at ASC LIMIT 25`,
+    `SELECT event_id, base_tx_hash, deposit_id, epoch_id, depositor, amount_usdc, attempts
+     FROM pending_deposits
+     WHERE status = 'pending' ORDER BY block_number, log_index NULLS FIRST, created_at LIMIT 25`,
   );
   for (const row of rows.rows) {
     try {
       if (!row.deposit_id) throw new Error("legacy deposit lacks a reconciliation id");
-      const resolution = depositResolution(row.epoch_id);
-      const applied = resolution === "record"
-        ? await recordDepositOnGenlayer(row.epoch_id as string, row.depositor, BigInt(row.amount_usdc), row.deposit_id)
-        : { txHash: null, accepted: false };
-      const reconciliationTx = await reconcileEscrowDeposit(row.deposit_id, applied.accepted);
+      const [result] = await reconcileDepositRows(
+        [row],
+        (item) => recordDepositOnGenlayer(
+          item.epoch_id as string, item.depositor, BigInt(item.amount_usdc), item.deposit_id,
+        ),
+        reconcileEscrowDeposit,
+      );
       await query(
-        `UPDATE pending_deposits SET status = 'applied', applied_tx = $2, reconciliation_tx = $3, updated_at = now() WHERE base_tx_hash = $1`,
-        [row.base_tx_hash, applied.txHash, reconciliationTx],
+        `UPDATE pending_deposits SET status = 'applied', applied_tx = $2, reconciliation_tx = $3, updated_at = now()
+         WHERE event_id = $1`,
+        [row.event_id, result.appliedTx, result.reconciliationTx],
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       await query(
-        `UPDATE pending_deposits SET attempts = attempts + 1, last_error = $2, updated_at = now() WHERE base_tx_hash = $1`,
-        [row.base_tx_hash, message],
+        `UPDATE pending_deposits SET attempts = attempts + 1, last_error = $2, updated_at = now()
+         WHERE event_id = $1`,
+        [row.event_id, message],
       );
-      logger.error({ err: message, baseTxHash: row.base_tx_hash }, "deposit apply failed; will retry");
+      logger.error({ err: message, eventId: row.event_id, baseTxHash: row.base_tx_hash }, "deposit apply failed; will retry");
     }
   }
 }

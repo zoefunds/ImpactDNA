@@ -77,9 +77,11 @@ deploying the escrow.
 24/7 guarantees are in `fly.toml`: `auto_stop_machines="off"`,
 `min_machines_running=1`, restart policy `always`, health checks on `/health`.
 Migrations run automatically at boot.
-The current production database has migrations `001` through `010` applied.
+The current production database has migrations `001` through `011` applied.
 Migration `009` persists Base settlement hashes; migration `010` preserves
-unrecognized epoch deposits so they can be reconciled as refundable.
+unrecognized epoch deposits so they can be reconciled as refundable; migration
+`011` changes deposit persistence from transaction identity to event identity
+so batched deposits are never collapsed.
 
 ### GitHub OAuth App (optional — developer identity linking only)
 
@@ -141,7 +143,8 @@ on that flag.
 ## Current production verification
 
 - Fly app `impactdna-milestone-api`: one started machine, health check passing.
-- Migrations through `010_unknown_epoch_deposits.sql`: applied at production startup on 2026-11-01.
+- Migrations through `011_deposit_event_identity.sql`: applied at production
+  startup on 2026-11-01.
 - Vercel deployment: production Ready and aliased to `https://impactdna.vercel.app`.
 - Live backend configuration resolves both operator and relayer keys to
   `0x0f4CAd4b62DfcEce23a6e88565BFf83C703B28e2` without exposing the keys.

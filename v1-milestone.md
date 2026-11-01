@@ -66,16 +66,18 @@ relaunch — this is a fresh start, not a migration.
   self-serve `claim(epochId)` / `claimMany(epochIds)`.
 - GenLayer contract (`contracts/impact_dna.py`) rewritten as the
   authoritative ledger: new relayer-only methods `record_deposit`,
-  `mark_grants_relayed`, `mark_grant_claimed` — every one idempotent on a
-  `base_tx_hash`, guarded by a `processed_base_tx` map, so a retried relay
-  sweep can never double-apply a deposit or a claim.
+  `mark_grants_relayed`, `mark_grant_claimed` — idempotent on the operation's
+  durable identity (`depositId`, settlement transaction hash, or claim event
+  id), guarded by the contract's processed-operation map so a retried relay
+  sweep cannot double-apply a deposit, allocation, or claim.
 - New backend relay loop (`backend/src/jobs/relay.ts` +
   `services/baseSepolia.ts` + `services/genlayerRelay.ts`): scans Base
   Sepolia for confirmed `Deposited`/`Claimed` events, applies them to
   GenLayer, and pushes closed epochs' settled grants to the escrow.
   Guarded by a Redis-backed distributed lock so multiple Fly machines
   never double-relay; durable via a `pending_deposits` table so a crash
-  mid-relay is simply retried, never lost.
+  mid-relay is simply retried, never lost. Deposit events are keyed by
+  transaction hash plus log index, so smart-account batches are preserved.
 - All GEN-denominated fields renamed to USDC (`treasury_usdc`,
   `reserved_usdc`, `pool_usdc`, `amount_usdc`, etc., 6-decimal base units)
   across the contract, backend, and frontend.
@@ -137,7 +139,7 @@ relaunch — this is a fresh start, not a migration.
   relay → claim lifecycle, including permissionless-epoch access control).
 - Base escrow: 7/7 Foundry regression tests pass, including invalid-epoch
   refunds and settlement deferral while deposit acknowledgements are pending.
-- Backend: TypeScript build and 8/8 relay/receipt tests pass; migrations `001`–`010`
+- Backend: TypeScript build and 9/9 relay/receipt tests pass; migrations `001`–`011`
   are applied in production. A complete Base deposit → GenLayer record →
   Base allocation → claim → GenLayer acknowledgement run is documented.
 - Frontend: production builds clean; wallet-connect modal, funding page

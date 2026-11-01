@@ -37,8 +37,10 @@ The coordinated deployment and deposit-recovery follow-up were completed on
 5. Reconnect GitHub accounts created before this milestone so OAuth can create their wallet-proof gist.
 6. Add migration `010_unknown_epoch_deposits.sql`, deploy the escrow-level
    pending-deposit settlement barrier, update the backend and frontend to the
-   current escrow address, and redeploy both services. Production logs confirm
-   migrations `001` through `010` are applied.
+   current escrow address, and redeploy both services.
+7. Add migration `011_deposit_event_identity.sql` and redeploy the backend so
+   every log in a batched deposit transaction has independent durable state.
+   Production logs confirm migrations `001` through `011` are applied.
 
 ## Archived Base Sepolia deposit-to-claim evidence
 
@@ -90,7 +92,7 @@ Current coordinated contract deployments:
 - Base Sepolia escrow: `0x51c7575D0893D6a5cc98dA5356A8e727502Eb8B0`
 
 Regression evidence: 13 Intelligent Contract tests, 7 Foundry escrow tests,
-8 backend tests, and a successful optimized frontend build.
+9 backend tests, and a successful optimized frontend build.
 
 ## Deposit-recoverability follow-up (2026-11-01)
 
@@ -111,3 +113,17 @@ Regression evidence: 13 Intelligent Contract tests, 7 Foundry escrow tests,
 - `testInvalidEpochDepositRemainsExactlyRefundable` and
   `testEmptySettlementWaitsForFailedBaseAcknowledgement` cover the two stranded
   deposit sequences. Backend tests cover known/unknown epoch-hash routing.
+
+## Batched-deposit event identity follow-up (2026-11-01)
+
+- Migration `011_deposit_event_identity.sql` replaces the deposit queue's
+  transaction-hash primary key with `event_id = <base_tx_hash>:<log_index>`.
+  The transaction hash remains indexed metadata, and the escrow's unique
+  `depositId` remains a uniqueness guard and the cross-chain reconciliation
+  identity.
+- Scanner inserts, success updates, and failure retries are event-scoped. A
+  cursor advances only after every `Deposited` log in the scanned range has
+  been offered to durable storage.
+- `reconciles every deposit emitted by one batched Base transaction` covers two
+  logs sharing one transaction hash and proves both deposit IDs are recorded,
+  Base-reconciled, and returned as completed results without omission.

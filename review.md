@@ -19,7 +19,7 @@ are in [`docs/MILESTONE-REMEDIATION.md`](docs/MILESTONE-REMEDIATION.md).
 | Owner / relayer / first curator | `0x0f4CAd4b62DfcEce23a6e88565BFf83C703B28e2` |
 
 The former operator key has been retired. Both live backend signing variables
-resolve to the rotated address above. Fly migrations `001` through `010` are
+resolve to the rotated address above. Fly migrations `001` through `011` are
 applied and the Vercel production deployment is Ready.
 
 ## Finding closure
@@ -37,6 +37,9 @@ applied and the Vercel production deployment is Ready.
   exact refund path, and active accepted collateral cannot be withdrawn.
 - **Unknown epoch recovery:** unmatched epoch hashes are persisted rather than
   skipped, then reconciled on Base as exactly refundable.
+- **Batched deposit recovery:** deposit queue identity includes the Base log
+  index, so every event in a multi-deposit transaction has independent retry
+  state and is reconciled using its unique `depositId`.
 - **Acknowledgement barrier:** Base tracks unresolved deposit counts and rejects
   grant or empty settlement until all deposit decisions land. The backend also
   defers settlement while its durable queue still has a pending acknowledgement.
@@ -57,10 +60,10 @@ applied and the Vercel production deployment is Ready.
 
 - Intelligent Contract: 13 tests passing.
 - Base escrow: 7 Foundry tests passing.
-- Backend: TypeScript build plus 8 relay/receipt tests passing.
+- Backend: TypeScript build plus 9 relay/receipt tests passing.
 - Frontend: optimized production build passing; only the documented non-fatal
   third-party `ox` dynamic-import warning remains.
-- Production: Fly health check passing, migrations `001` through `010` applied,
+- Production: Fly health check passing, migrations `001` through `011` applied,
   Vercel Ready,
   and both public contract addresses present in the live documentation page.
 

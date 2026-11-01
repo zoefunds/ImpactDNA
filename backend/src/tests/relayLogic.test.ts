@@ -1,6 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { depositResolution, grantsForClaim, resolveEpochId, type GrantRecord } from "../jobs/relayLogic.js";
+import {
+  depositEventId,
+  depositResolution,
+  grantsForClaim,
+  reconcileDepositRows,
+  resolveEpochId,
+  type GrantRecord,
+  type PendingDepositRow,
+} from "../jobs/relayLogic.js";
 import { ethers } from "ethers";
 
 const grants: GrantRecord[] = [
@@ -30,4 +38,39 @@ test("resolves known epoch hashes and routes unknown hashes to exact refund", ()
   assert.equal(resolveEpochId(epochs, ethers.id("e-2"), ethers.id), "e-2");
   assert.equal(depositResolution(resolveEpochId(epochs, ethers.id("e-404"), ethers.id)), "refund");
   assert.equal(depositResolution("e-1"), "record");
+});
+
+test("reconciles every deposit emitted by one batched Base transaction", async () => {
+  const baseTxHash = "0xBATCH";
+  const rows: PendingDepositRow[] = [
+    {
+      event_id: depositEventId(baseTxHash, 7), base_tx_hash: baseTxHash.toLowerCase(),
+      deposit_id: "0xdeposit1", epoch_id: "e-1", depositor: "0xaaa", amount_usdc: "100",
+    },
+    {
+      event_id: depositEventId(baseTxHash, 8), base_tx_hash: baseTxHash.toLowerCase(),
+      deposit_id: "0xdeposit2", epoch_id: "e-1", depositor: "0xbbb", amount_usdc: "200",
+    },
+  ];
+  assert.notEqual(rows[0].event_id, rows[1].event_id);
+
+  const recorded: string[] = [];
+  const reconciled: string[] = [];
+  const results = await reconcileDepositRows(
+    rows,
+    async (row) => {
+      recorded.push(row.deposit_id);
+      return { txHash: `genlayer:${row.deposit_id}`, accepted: true };
+    },
+    async (depositId, accepted) => {
+      assert.equal(accepted, true);
+      reconciled.push(depositId);
+      return `base:${depositId}`;
+    },
+  );
+
+  assert.deepEqual(recorded, ["0xdeposit1", "0xdeposit2"]);
+  assert.deepEqual(reconciled, ["0xdeposit1", "0xdeposit2"]);
+  assert.deepEqual(results.map((result) => result.eventId), ["0xbatch:7", "0xbatch:8"]);
+  assert.equal(results.length, rows.length, "no pending deposit event may be omitted");
 });

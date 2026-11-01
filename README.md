@@ -104,6 +104,10 @@ GenLayer's own EVM-compatibility layer can move its native GEN token, but not an
 
 - **Deposits**: anyone calls `ImpactDnaEscrow.deposit(epochId, depositId, amount)` (standard ERC20 approve + deposit). The relayer resolves the epoch and calls `record_deposit(epoch_id, depositor, amount, deposit_id)`, then reconciles the same exact Base deposit as accepted or refundable. This closes the cross-chain epoch-close race without stranding funds.
 - **Unknown epochs**: every confirmed deposit event is persisted even when its epoch hash does not resolve to a GenLayer epoch. The relayer marks that deposit refundable instead of advancing the scan cursor and losing it.
+- **Batched deposits**: durable rows are keyed by transaction hash plus log
+  index and reconciled by the escrow's unique `depositId`. Several `Deposited`
+  logs from one smart-account transaction are therefore persisted and retried
+  independently before the scan cursor advances.
 - **Settlement relay**: once a curator (or the epoch's own opener) closes an epoch, the relayer pushes non-zero grants through `setGrants(...)`, or calls `settleEmptyEpoch(...)` when a funded round has no eligible recipients. The original Base transaction hash is persisted before the GenLayer acknowledgement, so partial failures reconcile without resubmitting an already-complete settlement.
 - **No settlement over pending acknowledgements**: Base counts unresolved deposits per epoch and rejects both `setGrants` and `settleEmptyEpoch` until every deposit is accepted or made refundable. The backend independently defers settlement while its durable deposit queue has pending rows.
 - **Claims**: a grant recipient calls `ImpactDnaEscrow.claim(epochId)` directly with their own wallet — the escrow holds the real USDC and pays out itself; durable relayer event rows mirror every `Claimed` log against complete grant records so failures and multi-claim transactions are retryable.

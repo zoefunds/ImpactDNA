@@ -13,9 +13,9 @@ from genlayer import *
 # (contracts/base/ImpactDnaEscrow.sol). This contract is the authoritative
 # ledger (epochs, scores, grant amounts) and a single trusted relayer
 # bridges the two chains — the same pattern used by meme-olympics'
-# baseSepolia.ts relay and Event-Weaver's stakeRelay.js. Every relayer-only
-# write here takes a `base_tx_hash` and is idempotent on it, so a retried
-# relay sweep can never double-apply a deposit or a claim.
+# baseSepolia.ts relay and Event-Weaver's stakeRelay.js. Relayer writes are
+# idempotent on their durable operation identity: deposit_id for deposits,
+# settlement transaction hash for allocations, and event_id for claims.
 
 
 # ---------------------------------------------------------------------------
@@ -381,7 +381,7 @@ class ImpactDNA(gl.Contract):
     curators: TreeMap[str, bool]  # address hex -> active
     curator_count: u256
     relayer: Address  # backend relayer authorized to bridge Base Sepolia <-> here
-    # base_tx_hash -> True, guards every relayer write against double-apply
+    # operation identity -> True, guards every relayer write against double-apply
     processed_base_tx: TreeMap[str, bool]
     deposit_outcomes: TreeMap[str, bool]
 

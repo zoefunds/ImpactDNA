@@ -69,7 +69,10 @@ call is mirrored back via `mark_grant_claimed` once observed.
 Every Base deposit is durable before the scan cursor advances. If its epoch
 hash cannot be resolved against the complete GenLayer epoch list, the row keeps
 the raw hash and is reconciled as refundable without attempting a GenLayer
-write. Base independently counts pending deposits per epoch; neither grant nor
+write. A deposit event is keyed by transaction hash plus log index, while the
+escrow's unique `depositId` is used for cross-chain reconciliation. This keeps
+multiple `Deposited` logs from one batched transaction independently retryable.
+Base independently counts pending deposits per epoch; neither grant nor
 empty settlement can finalize until that count is zero. The backend applies the
 same barrier using its durable queue, so a temporary Base acknowledgement
 failure cannot race terminal settlement.
@@ -145,7 +148,8 @@ github_username, role), `refresh_tokens`, `auth_nonces` (SIWE challenges),
 `contribution_mirror` (fast reads; chain is canonical), `pending_deposits`,
 `pending_claims`, `relay_sync_state`, and `epoch_settlements` (durable relay
 events/retries/cursors and allocation hashes). `pending_deposits` also retains
-the raw Base `epoch_hash` when no GenLayer epoch resolves. Other tables are
+the raw Base `epoch_hash` when no GenLayer epoch resolves and identifies each
+log by `event_id = <base_tx_hash>:<log_index>`. Other tables are
 `notification_log`, `audit_events`, and `schema_migrations`. Forward-only SQL
 migrations are applied transactionally at boot.
 
